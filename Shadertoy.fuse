@@ -213,6 +213,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 -- ==============================================================================
 local CompatibilityHeader = [=[
 // --- GLSL to DCTL / Metal Compatibility Layer ---
+#ifndef __METAL_VERSION__
+#define thread
+#endif
+
 typedef float2 vec2;
 typedef float3 vec3;
 typedef float4 vec4;
@@ -293,16 +297,19 @@ local function PreprocessUserGLSL(glslCode)
 
     -- Strip precision directives
     code = code:gsub("precision%s+[%w_]+%s+[%w_]+%s*;", "")
+    code = code:gsub("%f[%w]highp%f[%W]", "")
+    code = code:gsub("%f[%w]mediump%f[%W]", "")
+    code = code:gsub("%f[%w]lowp%f[%W]", "")
 
     -- Comment out user-declared uniform lines that would collide with struct members
     code = code:gsub("uniform%s+[^;]+;", "// %0")
 
-    -- Normalize 'out vec4 <name>' to 'vec4& <name>'
-    code = code:gsub("out%s+vec4%s+([%a_][%w_]*)", "vec4& %1")
-    -- Normalize generic 'out <type> <name>' to '<type>& <name>'
-    code = code:gsub("out%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1& %2")
-    -- Normalize 'inout <type> <name>' to '<type>& <name>'
-    code = code:gsub("inout%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1& %2")
+    -- Normalize 'out vec4 <name>' to 'thread vec4& <name>' (explicit thread address space required by Apple Metal)
+    code = code:gsub("out%s+vec4%s+([%a_][%w_]*)", "thread vec4& %1")
+    -- Normalize generic 'out <type> <name>' to 'thread <type>& <name>'
+    code = code:gsub("out%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
+    -- Normalize 'inout <type> <name>' to 'thread <type>& <name>'
+    code = code:gsub("inout%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
     -- Normalize 'in <type> <name>' to '<type> %2'
     code = code:gsub("in%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1 %2")
 
@@ -313,7 +320,7 @@ local function PreprocessUserGLSL(glslCode)
 
     -- Support classic GLSL shaders with void main() instead of void mainImage()
     if code:find("void%s+mainImage") == nil and code:find("void%s+main%s*%(") ~= nil then
-        code = code .. "\n    void mainImage(vec4& fragColor, vec2 fragCoord) { this->gl_FragCoord = fragCoord; this->gl_FragColor = to_float4(0.0f, 0.0f, 0.0f, 1.0f); main(); fragColor = this->gl_FragColor; }\n"
+        code = code .. "\n    void mainImage(thread vec4& fragColor, vec2 fragCoord) { this->gl_FragCoord = fragCoord; this->gl_FragColor = to_float4(0.0f, 0.0f, 0.0f, 1.0f); main(); fragColor = this->gl_FragColor; }\n"
     end
 
     return code
