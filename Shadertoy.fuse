@@ -326,10 +326,27 @@ local function PreprocessUserGLSL(glslCode)
     return code
 end
 
+local function SimpleHash(s)
+    local h = 2166136261
+    for i = 1, #s do
+        h = (h * 16777619 + string.byte(s, i)) % 4294967296
+    end
+    return string.format("%08x", h)
+end
+
+local function DebugLog(msg)
+    local f = io.open("/tmp/shadertoy_debug.log", "a")
+    if f then
+        f:write(string.format("[%s] %s\n", os.date("%H:%M:%S"), tostring(msg)))
+        f:close()
+    end
+end
+
 -- ==============================================================================
 -- 6. KERNEL CODE GENERATOR
 -- ==============================================================================
-local function BuildFullKernelSource(userGLSL)
+local function BuildFullKernelSource(userGLSL, kernelName)
+    local kName = kernelName or "ShadertoyKernel"
     local processedGLSL = PreprocessUserGLSL(userGLSL)
 
     local kernel = CompatibilityHeader .. "\n"
@@ -375,7 +392,7 @@ struct ShadertoyContext {
 };
 
 // --- DVIP Native Kernel Entry Point ---
-__KERNEL__ void ShadertoyKernel(__CONSTANTREF__ ShadertoyParams *params, __TEXTURE2D__ iChannel0, __TEXTURE2D_WRITE__ dst)
+__KERNEL__ void ]] .. kName .. [[(__CONSTANTREF__ ShadertoyParams *params, __TEXTURE2D__ iChannel0, __TEXTURE2D_WRITE__ dst)
 {
     DEFINE_KERNEL_ITERATORS_XY(x, y);
     if (x < params->width && y < params->height)
@@ -508,29 +525,32 @@ end
 -- ==============================================================================
 function NotifyChanged(inp, param, time)
     if InCode == nil then return end
+    local t = time or 0
     if inp == InPreset and param ~= nil then
         local presetIdx = math.floor(param.Value)
+        DebugLog("NotifyChanged: Preset switched to " .. tostring(presetIdx))
         if presetIdx == 1 then
-            InCode:SetSource(MakeText(PRESET_1_PLASMA), 0)
+            InCode:SetSource(MakeText(PRESET_1_PLASMA), t)
         elseif presetIdx == 2 then
-            InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), 0)
+            InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), t)
         elseif presetIdx == 3 then
-            InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), 0)
+            InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), t)
         end
     elseif inp == InResetBtn and param ~= nil and param.Value == 1 then
         local presetIdx = 1
         if InPreset then
-            local val = InPreset:GetValue(time or 0)
+            local val = InPreset:GetValue(t)
             if val ~= nil and val.Value ~= nil then
                 presetIdx = math.floor(val.Value)
             end
         end
+        DebugLog("NotifyChanged: ResetCode clicked for preset " .. tostring(presetIdx))
         if presetIdx == 1 then
-            InCode:SetSource(MakeText(PRESET_1_PLASMA), 0)
+            InCode:SetSource(MakeText(PRESET_1_PLASMA), t)
         elseif presetIdx == 2 then
-            InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), 0)
+            InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), t)
         elseif presetIdx == 3 then
-            InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), 0)
+            InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), t)
         end
     end
 end
@@ -596,15 +616,28 @@ function Process(req)
         return
     end
 
-    -- Fetch user controls safely
+    -- 1. Explicitly read InPreset so Fusion registers InPreset in the tool's dependency graph
+    local presetVal = 0
+    if InPreset then
+        local p = InPreset:GetValue(req)
+        if p then presetVal = math.floor(p.Value) end
+    end
+
+    -- 2. Fetch user controls safely
     local code = ""
     if InCode and InCode:GetValue(req) ~= nil then
         code = InCode:GetValue(req).Value or ""
     end
     if code == nil or code == "" or code:match("^%s*$") then
-        code = PRESET_1_PLASMA
+        if presetVal == 2 then
+            code = PRESET_2_RAYMARCHING
+        elseif presetVal == 3 then
+            code = PRESET_3_CYBERPUNK
+        else
+            code = PRESET_1_PLASMA
+        end
         if InCode then
-            pcall(function() InCode:SetSource(MakeText(PRESET_1_PLASMA), 0) end)
+            pcall(function() InCode:SetSource(MakeText(code), req.Time or 0) end)
         end
     end
     local timeScale = InTimeScale:GetValue(req).Value
@@ -620,11 +653,15 @@ function Process(req)
     local timeDeltaInSeconds = (1.0 / framerate) * timeScale
     local currentFrame = math.floor(curTime) + frameOffset
 
-    -- Generate full kernel with user shader
-    local kernelSource = BuildFullKernelSource(code)
+    -- Dynamic unique kernel name per shader hash to prevent stale GPU caching
+    local kernelHash = SimpleHash(code)
+    local kernelName = "ShadertoyKernel_" .. kernelHash
+    local kernelSource = BuildFullKernelSource(code, kernelName)
+
+    DebugLog(string.format("Process: Time=%s, presetVal=%d, codeLen=%d, kernel=%s", tostring(curTime), presetVal, #code, kernelName))
 
     -- Create DVIP Compute Node (compiles via Metal on macOS)
-    local node = DVIPComputeNode(req, "ShadertoyKernel", kernelSource, "ShadertoyParams", ShadertoyParams)
+    local node = DVIPComputeNode(req, kernelName, kernelSource, "ShadertoyParams", ShadertoyParams)
     local success = false
 
     if node then
@@ -657,14 +694,18 @@ function Process(req)
         success = node:RunSession(req)
         if not success then
             local errLog = node:GetErrorLog()
+            DebugLog("Process GPU Execution Error: " .. tostring(errLog))
             print("\n=======================================================")
             print("[Shadertoy Fuse] GPU Execution Error:")
             print(tostring(errLog))
             print("=======================================================\n")
+        else
+            DebugLog("Process: RunSession SUCCESS for " .. kernelName)
         end
     else
+        DebugLog("Process DVIP Metal Compilation Error for " .. kernelName)
         print("\n=======================================================")
-        print("[Shadertoy Fuse] DVIP Metal Compilation Error!")
+        print("[Shadertoy Fuse] DVIP Metal Compilation Error for " .. kernelName)
         print("Please check syntax in the Inspector code editor.")
         print("=======================================================\n")
     end
