@@ -5,7 +5,7 @@
 | Present Design and Shadertoy GLSL/DCTL transpilation strategy | Completed | Emulation wrapper, UI, Uniforms, Error handling designed |
 | Write validated Design Doc | Completed | Saved in docs/plans/2026-09-19-shadertoy-fuse-design.md |
 | Create Implementation Plan | Completed | Saved in implementation_plan.md and docs/plans/ |
-| Implement Shadertoy Fuse Generator (`.fuse` + header) | In Progress | Implementing Shadertoy.fuse with GLSL/DCTL compatibility layer |
-| Implement Test Shaders & Presets | Pending | Simple geometric + 3D Raymarching SDF |
-| Create Complete User Guide & Documentation | Pending | Installation, Fusion/Edit usage, GLSL migration guide |
-| Verify and Validate | Pending | Syntax, installation path, error fallback |
+| Implement Shadertoy Fuse Generator (`.fuse` + header) | Completed | Shadertoy.fuse implemented with live TextEditControl and DVIP Metal engine |
+| Implement Test Shaders & Presets | Completed | 3 shaders created (Plasma 2D, Raymarching 3D SDF, Cyberpunk Grid) |
+| Create Complete User Guide & Documentation | Completed | README.md complete with installation, usage, and migration guide |
+| Verify and Validate | Completed | Syntax checked with luac, tests passed, installed to ~/Library/.../Fuses |
