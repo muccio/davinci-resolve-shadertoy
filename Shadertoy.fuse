@@ -220,11 +220,6 @@ typedef int2 ivec2;
 typedef int3 ivec3;
 typedef int4 ivec4;
 
-#define iChannel0 0
-#define iChannel1 1
-#define iChannel2 2
-#define iChannel3 3
-
 struct mat2 {
     float2 col0;
     float2 col1;
@@ -239,6 +234,27 @@ inline float2 operator*(mat2 m, float2 v) {
     return to_float2(m.col0.x * v.x + m.col1.x * v.y, m.col0.y * v.x + m.col1.y * v.y);
 }
 
+struct mat3 {
+    float3 col0;
+    float3 col1;
+    float3 col2;
+    mat3() : col0(to_float3(1.0f, 0.0f, 0.0f)), col1(to_float3(0.0f, 1.0f, 0.0f)), col2(to_float3(0.0f, 0.0f, 1.0f)) {}
+    mat3(float m00, float m01, float m02, float m10, float m11, float m12, float m20, float m21, float m22) {
+        col0 = to_float3(m00, m01, m02);
+        col1 = to_float3(m10, m11, m12);
+        col2 = to_float3(m20, m21, m22);
+    }
+    mat3(float3 c0, float3 c1, float3 c2) : col0(c0), col1(c1), col2(c2) {}
+};
+
+inline float3 operator*(mat3 m, float3 v) {
+    return to_float3(
+        m.col0.x * v.x + m.col1.x * v.y + m.col2.x * v.z,
+        m.col0.y * v.x + m.col1.y * v.y + m.col2.y * v.z,
+        m.col0.z * v.x + m.col1.z * v.y + m.col2.z * v.z
+    );
+}
+
 // GLSL mod emulation: x - y * floor(x / y)
 template<typename T, typename U>
 inline T mod(T x, U y) { return x - y * floor(x / y); }
@@ -246,6 +262,20 @@ inline T mod(T x, U y) { return x - y * floor(x / y); }
 // GLSL 2-argument atan -> Metal atan2
 inline float atan(float y, float x) { return atan2(y, x); }
 inline float2 atan(float2 y, float2 x) { return atan2(y, x); }
+
+// Derivative fallbacks for compute kernels
+inline float dFdx(float val) { return 0.001f; }
+inline float2 dFdx(float2 val) { return to_float2(0.001f, 0.001f); }
+inline float3 dFdx(float3 val) { return to_float3(0.001f, 0.001f, 0.001f); }
+inline float4 dFdx(float4 val) { return to_float4(0.001f, 0.001f, 0.001f, 0.001f); }
+inline float dFdy(float val) { return 0.001f; }
+inline float2 dFdy(float2 val) { return to_float2(0.001f, 0.001f); }
+inline float3 dFdy(float3 val) { return to_float3(0.001f, 0.001f, 0.001f); }
+inline float4 dFdy(float4 val) { return to_float4(0.001f, 0.001f, 0.001f, 0.001f); }
+inline float fwidth(float val) { return 0.001f; }
+inline float2 fwidth(float2 val) { return to_float2(0.001f, 0.001f); }
+inline float3 fwidth(float3 val) { return to_float3(0.001f, 0.001f, 0.001f); }
+inline float4 fwidth(float4 val) { return to_float4(0.001f, 0.001f, 0.001f, 0.001f); }
 ]=]
 
 -- ==============================================================================
@@ -258,6 +288,15 @@ local function PreprocessUserGLSL(glslCode)
 
     local code = glslCode
 
+    -- Strip #version directives
+    code = code:gsub("#version%s+.*", "")
+
+    -- Strip precision directives
+    code = code:gsub("precision%s+[%w_]+%s+[%w_]+%s*;", "")
+
+    -- Comment out user-declared uniform lines that would collide with struct members
+    code = code:gsub("uniform%s+[^;]+;", "// %0")
+
     -- Normalize 'out vec4 <name>' to 'vec4& <name>'
     code = code:gsub("out%s+vec4%s+([%a_][%w_]*)", "vec4& %1")
     -- Normalize generic 'out <type> <name>' to '<type>& <name>'
@@ -269,6 +308,13 @@ local function PreprocessUserGLSL(glslCode)
 
     -- Clean floating point literals without fractional part, e.g., '1.' -> '1.0f'
     code = code:gsub("(%d+)%.([^%d%w_])", "%1.0f%2")
+    code = code:gsub("(%d+)%.\n", "%1.0f\n")
+    code = code:gsub("(%d+)%.$", "%1.0f")
+
+    -- Support classic GLSL shaders with void main() instead of void mainImage()
+    if code:find("void%s+mainImage") == nil and code:find("void%s+main%s*%(") ~= nil then
+        code = code .. "\n    void mainImage(vec4& fragColor, vec2 fragCoord) { this->gl_FragCoord = fragCoord; this->gl_FragColor = to_float4(0.0f, 0.0f, 0.0f, 1.0f); main(); fragColor = this->gl_FragColor; }\n"
+    end
 
     return code
 end
@@ -285,14 +331,34 @@ local function BuildFullKernelSource(userGLSL)
 struct ShadertoyContext {
     __CONSTANTREF__ ShadertoyParams *params;
     __TEXTURE2D__ iChannel0;
+    __TEXTURE2D__ iChannel1;
+    __TEXTURE2D__ iChannel2;
+    __TEXTURE2D__ iChannel3;
     float3 iResolution;
     float iTime;
     float iTimeDelta;
     int iFrame;
     float4 iMouse;
+    vec4 gl_FragColor;
+    vec2 gl_FragCoord;
 
-    // Helper for texture sampling
+    // Helpers for texture sampling
+    inline float4 texture(__TEXTURE2D__ ch, vec2 uv) {
+        return _tex2DVecN(ch, uv.x, uv.y, params->compOrder);
+    }
+    inline float4 texture(__TEXTURE2D__ ch, vec2 uv, float bias) {
+        return _tex2DVecN(ch, uv.x, uv.y, params->compOrder);
+    }
     inline float4 texture(int ch, vec2 uv) {
+        return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
+    }
+    inline float4 texture(vec2 uv) {
+        return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
+    }
+    inline float4 textureLod(__TEXTURE2D__ ch, vec2 uv, float lod) {
+        return _tex2DVecN(ch, uv.x, uv.y, params->compOrder);
+    }
+    inline float4 textureLod(int ch, vec2 uv, float lod) {
         return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
     }
 
@@ -310,6 +376,9 @@ __KERNEL__ void ShadertoyKernel(__CONSTANTREF__ ShadertoyParams *params, __TEXTU
         ShadertoyContext ctx;
         ctx.params = params;
         ctx.iChannel0 = iChannel0;
+        ctx.iChannel1 = iChannel0;
+        ctx.iChannel2 = iChannel0;
+        ctx.iChannel3 = iChannel0;
         ctx.iResolution = to_float3(params->iResolution[0], params->iResolution[1], params->iResolution[2]);
         ctx.iTime = params->iTime;
         ctx.iTimeDelta = params->iTimeDelta;
@@ -336,11 +405,12 @@ function Create()
     self:BeginControlNest("Shadertoy Controls", "ShadertoyNest", true)
 
         InPreset = self:AddInput("Preset", "Preset", {
-            LINKID_DataType    = "Number",
-            INPID_InputControl = "ComboControl",
-            INP_Default        = 1.0,
-            INP_Integer        = true,
+            LINKID_DataType     = "Number",
+            INPID_InputControl  = "ComboControl",
+            INP_Default         = 1.0,
+            INP_Integer         = true,
             INP_DoNotifyChanged = true,
+            INP_InitialNotify   = true,
             { CCS_AddString = "Custom Shader", },
             { CCS_AddString = "Preset 1: Plasma & Waves (2D)", },
             { CCS_AddString = "Preset 2: 3D Raymarching SDF", },
@@ -398,7 +468,7 @@ function Create()
             INPID_InputControl  = "TextEditControl",
             TEC_Lines           = 24,
             TEC_Wrap            = false,
-            INP_DefaultText     = PRESET_1_PLASMA,
+            INPS_DefaultText    = PRESET_1_PLASMA,
             INP_DoNotifyChanged = true,
         })
 
@@ -419,11 +489,11 @@ function Create()
 end
 
 local function MakeText(s)
-    if type(Text) == "function" then
-        return Text(s)
-    else
-        return s
+    if Text then
+        local ok, res = pcall(function() return Text(s) end)
+        if ok and res ~= nil then return res end
     end
+    return s
 end
 
 -- ==============================================================================
@@ -442,8 +512,11 @@ function NotifyChanged(inp, param, time)
         end
     elseif inp == InResetBtn and param ~= nil and param.Value == 1 then
         local presetIdx = 1
-        if InPreset and InPreset:GetSource(0) ~= nil then
-            presetIdx = math.floor(InPreset:GetSource(0).Value)
+        if InPreset then
+            local val = InPreset:GetValue(time or 0)
+            if val ~= nil and val.Value ~= nil then
+                presetIdx = math.floor(val.Value)
+            end
         end
         if presetIdx == 1 then
             InCode:SetSource(MakeText(PRESET_1_PLASMA), 0)
@@ -521,8 +594,11 @@ function Process(req)
     if InCode and InCode:GetValue(req) ~= nil then
         code = InCode:GetValue(req).Value or ""
     end
-    if code == nil or code == "" then
+    if code == nil or code == "" or code:match("^%s*$") then
         code = PRESET_1_PLASMA
+        if InCode then
+            pcall(function() InCode:SetSource(MakeText(PRESET_1_PLASMA), 0) end)
+        end
     end
     local timeScale = InTimeScale:GetValue(req).Value
     local timeOffset = InTimeOffset:GetValue(req).Value
