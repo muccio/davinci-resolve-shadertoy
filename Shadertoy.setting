@@ -1,0 +1,74 @@
+{
+	Tools = ordered() {
+		Shadertoy = MacroOperator {
+			Inputs = ordered() {
+				Input1 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "Preset",
+					Name = "Preset",
+				},
+				Input2 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "ResetCode",
+					Name = "Reset Code to Preset",
+				},
+				Input3 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "TimeScale",
+					Name = "Time Speed (iTime)",
+					Default = 1,
+				},
+				Input4 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "TimeOffset",
+					Name = "Time Offset (sec)",
+					Default = 0,
+				},
+				Input5 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "FrameOffset",
+					Name = "Frame Offset",
+					Default = 0,
+				},
+				Input6 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "MousePos",
+					Name = "Mouse Position (iMouse.xy)",
+				},
+				Input7 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "MouseDown",
+					Name = "Mouse Click (iMouse.z)",
+					Default = 0,
+				},
+				Input8 = InstanceInput {
+					SourceOp = "Shadertoy1",
+					Source = "ShaderCode",
+					Name = "GLSL Shader Code",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "MediaOut1",
+					Source = "Output",
+				}
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Shadertoy1 = Fuse.ShadertoyFuse {
+					ViewInfo = OperatorInfo { Pos = { -100, 0 } },
+				},
+				MediaOut1 = MediaOut {
+					Inputs = {
+						Index = Input { Value = "0", },
+						Input = Input {
+							SourceOp = "Shadertoy1",
+							Source = "Output",
+						},
+					},
+					ViewInfo = OperatorInfo { Pos = { 100, 0 } },
+				}
+			},
+		}
+	}
+}

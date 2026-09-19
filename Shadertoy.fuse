@@ -1,0 +1,652 @@
+--[[--
+==============================================================================
+Shadertoy Generator Fuse for DaVinci Resolve & Fusion (macOS / Metal / Cross-Platform)
+==============================================================================
+Allows pasting and real-time GPU rendering of Shadertoy GLSL fragment shaders
+directly in DaVinci Resolve's Fusion page and Edit page timeline.
+
+Architecture:
+- Fusion DCTL Fuse (CT_SourceTool)
+- DVIP Compute Engine (compiled at runtime via Apple Metal on macOS)
+- Multi-line TextEditControl Inspector UI
+- Full uniform mapping: iResolution, iTime, iTimeDelta, iFrame, iMouse, iChannel0
+- Built-in GLSL compatibility layer and presets
+- Fault-tolerant error handling with non-crashing visual fallback
+==============================================================================
+--]]--
+
+-- ==============================================================================
+-- 1. FUSE REGISTRATION
+-- ==============================================================================
+FuRegisterClass("ShadertoyFuse", CT_SourceTool, {
+    REGS_Name          = "Shadertoy",
+    REGS_Category      = "Fuses\\Generators",
+    REGS_OpIconString  = "STy",
+    REGS_OpDescription = "Execute real-time Shadertoy fragment shaders inside DaVinci Resolve",
+    REGS_Company       = "Custom Native",
+    REGS_URL           = "https://www.shadertoy.com",
+    REG_Version        = 100,
+
+    REG_NoObjMatCtrls      = true,
+    REG_NoMotionBlurCtrls  = true,
+    REG_Source_GlobalCtrls = true,
+    REG_Source_SizeCtrls   = true,
+    REG_Source_AspectCtrls = true,
+    REG_Source_DepthCtrls  = true,
+    REG_OpNoMask           = true,
+    REG_TimeVariant        = true,  -- Guarantees per-frame evaluation for procedural animations
+    REG_NoPreCalcProcess   = true,
+    REG_Fuse_NoEdit        = false,
+    REG_Fuse_NoReload      = false,
+})
+
+-- ==============================================================================
+-- 2. DCTL / METAL KERNEL PARAMETERS BLOCK
+-- ==============================================================================
+ShadertoyParams = [[
+    float iResolution[3];
+    float iTime;
+    float iTimeDelta;
+    int iFrame;
+    float iMouse[4];
+    int hasChannel0;
+    int width;
+    int height;
+    int compOrder;
+]]
+
+-- ==============================================================================
+-- 3. EMBEDDED PRESET SHADERS
+-- ==============================================================================
+
+local PRESET_1_PLASMA = [=[// Preset 1: 2D Geometric Plasma & Wave Interference
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+    float t = iTime * 0.8;
+
+    float v1 = sin(uv.x * 10.0 + t);
+    float v2 = sin(uv.y * 10.0 + t * 1.2);
+    float v3 = sin((uv.x + uv.y) * 10.0 + t * 0.5);
+
+    float cx = uv.x + 0.5 * sin(t * 0.3);
+    float cy = uv.y + 0.5 * cos(t * 0.5);
+    float v4 = sin(sqrt(100.0 * (cx * cx + cy * cy) + 1.0) + t * 1.5);
+
+    float v = (v1 + v2 + v3 + v4) * 0.25;
+    vec3 col = 0.5 + 0.5 * cos(vec3(v * 3.14159 + 0.0, v * 3.14159 + 2.0, v * 3.14159 + 4.0) + t * 0.3);
+
+    vec2 q = fragCoord / iResolution.xy;
+    col *= 0.5 + 0.5 * pow(16.0 * q.x * q.y * (1.0 - q.x) * (1.0 - q.y), 0.25);
+
+    fragColor = vec4(col, 1.0);
+}
+]=]
+
+local PRESET_2_RAYMARCHING = [=[// Preset 2: 3D Raymarching SDF (Sphere, Torus, Phong Lighting & Mouse Orbit)
+mat2 rot2D(float a) {
+    float s = sin(a), c = cos(a);
+    return mat2(c, -s, s, c);
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float sdTorus(vec3 p, vec2 t) {
+    vec2 q = vec2(length(p.xz) - t.x, p.y);
+    return length(q) - t.y;
+}
+
+float sceneSDF(vec3 p) {
+    float sphere = sdSphere(p, 0.8 + 0.08 * sin(iTime * 2.5));
+    vec3 tp = p;
+    tp.xy = rot2D(iTime * 0.7) * tp.xy;
+    tp.yz = rot2D(iTime * 0.5) * tp.yz;
+    float torus = sdTorus(tp, vec2(1.3, 0.22));
+    return min(sphere, torus);
+}
+
+vec3 calcNormal(vec3 p) {
+    const float h = 0.001;
+    const vec2 k = vec2(1.0, -1.0);
+    return normalize(
+        k.xyy * sceneSDF(p + k.xyy * h) +
+        k.yyx * sceneSDF(p + k.yyx * h) +
+        k.yxy * sceneSDF(p + k.yxy * h) +
+        k.xxx * sceneSDF(p + k.xxx * h)
+    );
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+    vec2 mouse = (iMouse.xy - 0.5 * iResolution.xy) / iResolution.y;
+
+    vec3 ro = vec3(0.0, 0.0, -3.6);
+    vec3 rd = normalize(vec3(uv, 1.2));
+
+    if (iMouse.z > 0.0) {
+        ro.yz = rot2D(mouse.y * 3.0) * ro.yz;
+        ro.xz = rot2D(-mouse.x * 3.0) * ro.xz;
+        rd.yz = rot2D(mouse.y * 3.0) * rd.yz;
+        rd.xz = rot2D(-mouse.x * 3.0) * rd.xz;
+    } else {
+        ro.xz = rot2D(iTime * 0.35) * ro.xz;
+        rd.xz = rot2D(iTime * 0.35) * rd.xz;
+    }
+
+    float t = 0.0;
+    float d = 0.0;
+    for (int i = 0; i < 80; i++) {
+        vec3 p = ro + rd * t;
+        d = sceneSDF(p);
+        if (d < 0.001 || t > 20.0) break;
+        t += d;
+    }
+
+    vec3 col = mix(vec3(0.04, 0.04, 0.12), vec3(0.12, 0.18, 0.32), uv.y + 0.5);
+
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 lightDir = normalize(vec3(1.2, 1.6, -1.0));
+
+        float diff = max(dot(n, lightDir), 0.0);
+        float amb = 0.15;
+
+        vec3 viewDir = -rd;
+        vec3 halfDir = normalize(lightDir + viewDir);
+        float spec = pow(max(dot(n, halfDir), 0.0), 32.0);
+
+        vec3 matCol = 0.5 + 0.5 * cos(vec3(0.0, 1.2, 2.4) + p.y * 2.0 + iTime);
+        col = (amb + diff) * matCol + spec * vec3(1.0, 0.95, 0.85);
+    }
+
+    fragColor = vec4(col, 1.0);
+}
+]=]
+
+local PRESET_3_CYBERPUNK = [=[// Preset 3: Cyberpunk Neon Grid & Synthwave Sunset
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+    vec3 col = vec3(0.015, 0.01, 0.04);
+
+    vec2 sunPos = vec2(0.0, 0.08);
+    float sunDist = length(uv - sunPos);
+    if (sunDist < 0.35 && uv.y > sunPos.y - 0.35) {
+        float bars = step(0.025, fract((uv.y - sunPos.y) * 16.0));
+        float sunGrad = (uv.y - (sunPos.y - 0.35)) / 0.7;
+        vec3 sunCol = mix(vec3(1.0, 0.1, 0.4), vec3(1.0, 0.85, 0.1), sunGrad);
+        if (bars > 0.5 || uv.y > 0.0) {
+            col = mix(col, sunCol, smoothstep(0.35, 0.34, sunDist));
+        }
+    }
+    col += vec3(1.0, 0.25, 0.5) * 0.12 / (sunDist + 0.1);
+
+    if (uv.y < 0.0) {
+        float pZ = 0.35 / (-uv.y);
+        float pX = uv.x * pZ;
+        pZ += iTime * 2.5;
+
+        vec2 grid = abs(fract(vec2(pX, pZ)) - 0.5);
+        float lineDist = min(grid.x, grid.y);
+        float gridLine = smoothstep(0.07, 0.0, lineDist);
+
+        float depthFog = exp(-pZ * 0.08);
+        vec3 gridCol = mix(vec3(0.0, 0.8, 1.0), vec3(1.0, 0.05, 0.8), sin(pZ * 0.25) * 0.5 + 0.5);
+
+        col += gridCol * gridLine * depthFog * 2.2;
+        col += vec3(0.0, 0.2, 0.5) * (-uv.y * 0.8);
+    }
+
+    float horizonGlow = 0.004 / abs(uv.y);
+    col += vec3(0.0, 0.85, 1.0) * clamp(horizonGlow, 0.0, 1.0);
+
+    fragColor = vec4(col, 1.0);
+}
+]=]
+
+-- ==============================================================================
+-- 4. GLSL / METAL COMPATIBILITY HEADER
+-- ==============================================================================
+local CompatibilityHeader = [=[
+// --- GLSL to DCTL / Metal Compatibility Layer ---
+typedef float2 vec2;
+typedef float3 vec3;
+typedef float4 vec4;
+typedef int2 ivec2;
+typedef int3 ivec3;
+typedef int4 ivec4;
+
+struct mat2 {
+    float2 col0;
+    float2 col1;
+#ifdef __cplusplus
+    __DEVICE__ mat2() : col0(to_float2(1.0f, 0.0f)), col1(to_float2(0.0f, 1.0f)) {}
+    __DEVICE__ mat2(float m00, float m01, float m10, float m11) {
+        col0 = to_float2(m00, m01);
+        col1 = to_float2(m10, m11);
+    }
+#endif
+};
+
+#ifdef __cplusplus
+__DEVICE__ inline float2 operator*(mat2 m, float2 v) {
+    return to_float2(m.col0.x * v.x + m.col1.x * v.y, m.col0.y * v.x + m.col1.y * v.y);
+}
+#endif
+
+// Vector & Math Helper Intrinsics
+#ifndef fract
+#define fract(x) ((x) - _floorf(x))
+#endif
+#ifndef mod
+#define mod(x, y) ((x) - (y) * _floorf((x)/(y)))
+#endif
+
+__DEVICE__ inline float2 fract(float2 v) { return to_float2(v.x - _floorf(v.x), v.y - _floorf(v.y)); }
+__DEVICE__ inline float3 fract(float3 v) { return to_float3(v.x - _floorf(v.x), v.y - _floorf(v.y), v.z - _floorf(v.z)); }
+__DEVICE__ inline float4 fract(float4 v) { return to_float4(v.x - _floorf(v.x), v.y - _floorf(v.y), v.z - _floorf(v.z), v.w - _floorf(v.w)); }
+
+__DEVICE__ inline float2 mod(float2 a, float2 b) { return to_float2(mod(a.x, b.x), mod(a.y, b.y)); }
+__DEVICE__ inline float2 mod(float2 a, float b)  { return to_float2(mod(a.x, b), mod(a.y, b)); }
+__DEVICE__ inline float3 mod(float3 a, float3 b) { return to_float3(mod(a.x, b.x), mod(a.y, b.y), mod(a.z, b.z)); }
+__DEVICE__ inline float3 mod(float3 a, float b)  { return to_float3(mod(a.x, b), mod(a.y, b), mod(a.z, b)); }
+
+__DEVICE__ inline float dot(float2 a, float2 b) { return a.x * b.x + a.y * b.y; }
+__DEVICE__ inline float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+__DEVICE__ inline float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+
+__DEVICE__ inline float length(float2 v) { return _sqrtf(dot(v, v)); }
+__DEVICE__ inline float length(float3 v) { return _sqrtf(dot(v, v)); }
+__DEVICE__ inline float length(float4 v) { return _sqrtf(dot(v, v)); }
+
+__DEVICE__ inline float distance(float2 a, float2 b) { return length(a - b); }
+__DEVICE__ inline float distance(float3 a, float3 b) { return length(a - b); }
+
+__DEVICE__ inline float2 normalize(float2 v) { float l = length(v); return l > 0.0f ? v / l : to_float2(0.0f, 0.0f); }
+__DEVICE__ inline float3 normalize(float3 v) { float l = length(v); return l > 0.0f ? v / l : to_float3(0.0f, 0.0f, 0.0f); }
+__DEVICE__ inline float4 normalize(float4 v) { float l = length(v); return l > 0.0f ? v / l : to_float4(0.0f, 0.0f, 0.0f, 0.0f); }
+
+__DEVICE__ inline float3 cross(float3 a, float3 b) {
+    return to_float3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+}
+
+__DEVICE__ inline float3 reflect(float3 i, float3 n) {
+    return i - 2.0f * dot(n, i) * n;
+}
+
+#define mix(a, b, t) _mix(a, b, t)
+#define clamp(x, a, b) _clampf(x, a, b)
+#define step(edge, x) ((x) >= (edge) ? 1.0f : 0.0f)
+#define abs(x) _fabs(x)
+#define sqrt(x) _sqrtf(x)
+#define sin(x) _sinf(x)
+#define cos(x) _cosf(x)
+#define tan(x) _tanf(x)
+#define atan(y, x) _atan2f(y, x)
+#define pow(x, y) _powf(x, y)
+#define exp(x) _expf(x)
+#define log(x) _logf(x)
+#define floor(x) _floorf(x)
+#define ceil(x) _ceilf(x)
+#define min(a, b) _fminf(a, b)
+#define max(a, b) _fmaxf(a, b)
+
+__DEVICE__ inline float2 abs(float2 v) { return to_float2(_fabs(v.x), _fabs(v.y)); }
+__DEVICE__ inline float3 abs(float3 v) { return to_float3(_fabs(v.x), _fabs(v.y), _fabs(v.z)); }
+__DEVICE__ inline float4 abs(float4 v) { return to_float4(_fabs(v.x), _fabs(v.y), _fabs(v.z), _fabs(v.w)); }
+
+__DEVICE__ inline float2 sin(float2 v) { return to_float2(_sinf(v.x), _sinf(v.y)); }
+__DEVICE__ inline float3 sin(float3 v) { return to_float3(_sinf(v.x), _sinf(v.y), _sinf(v.z)); }
+__DEVICE__ inline float4 sin(float4 v) { return to_float4(_sinf(v.x), _sinf(v.y), _sinf(v.z), _sinf(v.w)); }
+
+__DEVICE__ inline float2 cos(float2 v) { return to_float2(_cosf(v.x), _cosf(v.y)); }
+__DEVICE__ inline float3 cos(float3 v) { return to_float3(_cosf(v.x), _cosf(v.y), _cosf(v.z)); }
+__DEVICE__ inline float4 cos(float4 v) { return to_float4(_cosf(v.x), _cosf(v.y), _cosf(v.z), _cosf(v.w)); }
+
+__DEVICE__ inline float smoothstep(float edge0, float edge1, float x) {
+    float t = _clampf((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Vector Overloaded Constructors
+#ifdef __cplusplus
+__DEVICE__ inline float2 vec2(float s) { return to_float2(s, s); }
+__DEVICE__ inline float2 vec2(float x, float y) { return to_float2(x, y); }
+__DEVICE__ inline float3 vec3(float s) { return to_float3(s, s, s); }
+__DEVICE__ inline float3 vec3(float x, float y, float z) { return to_float3(x, y, z); }
+__DEVICE__ inline float3 vec3(float2 v, float z) { return to_float3(v.x, v.y, z); }
+__DEVICE__ inline float3 vec3(float x, float2 v) { return to_float3(x, v.x, v.y); }
+__DEVICE__ inline float4 vec4(float s) { return to_float4(s, s, s, s); }
+__DEVICE__ inline float4 vec4(float x, float y, float z, float w) { return to_float4(x, y, z, w); }
+__DEVICE__ inline float4 vec4(float3 v, float w) { return to_float4(v.x, v.y, v.z, w); }
+__DEVICE__ inline float4 vec4(float x, float3 v) { return to_float4(x, v.x, v.y, v.z); }
+__DEVICE__ inline float4 vec4(float2 a, float2 b) { return to_float4(a.x, a.y, b.x, b.y); }
+__DEVICE__ inline float4 vec4(float2 a, float b, float c) { return to_float4(a.x, a.y, b, c); }
+#endif
+]=]
+
+-- ==============================================================================
+-- 5. LUA GLSL PREPROCESSOR
+-- ==============================================================================
+local function PreprocessUserGLSL(glslCode)
+    if not glslCode or glslCode == "" then
+        return PRESET_1_PLASMA
+    end
+
+    local code = glslCode
+
+    -- Normalize 'out vec4 <name>' to 'vec4& <name>'
+    code = code:gsub("out%s+vec4%s+([%a_][%w_]*)", "vec4& %1")
+    -- Normalize generic 'out <type> <name>' to '<type>& <name>'
+    code = code:gsub("out%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1& %2")
+    -- Normalize 'inout <type> <name>' to '<type>& <name>'
+    code = code:gsub("inout%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1& %2")
+    -- Normalize 'in <type> <name>' to '<type> %2'
+    code = code:gsub("in%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1 %2")
+
+    -- Clean floating point literals without fractional part, e.g., '1.' -> '1.0f'
+    code = code:gsub("(%d+)%.([^%d%w_])", "%1.0f%2")
+
+    return code
+end
+
+-- ==============================================================================
+-- 6. KERNEL CODE GENERATOR
+-- ==============================================================================
+local function BuildFullKernelSource(userGLSL)
+    local processedGLSL = PreprocessUserGLSL(userGLSL)
+
+    local kernel = CompatibilityHeader .. "\n"
+    kernel = kernel .. [[
+// --- Unified Shadertoy Scope Wrapper ---
+struct ShadertoyContext {
+    __CONSTANTREF__ ShadertoyParams *params;
+    __TEXTURE2D__ iChannel0;
+    float3 iResolution;
+    float iTime;
+    float iTimeDelta;
+    int iFrame;
+    float4 iMouse;
+
+    // Helper for texture sampling
+    __DEVICE__ inline float4 texture(int ch, vec2 uv) {
+        return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
+    }
+
+    // Insert user shader code here
+]] .. processedGLSL .. [[
+
+};
+
+// --- DVIP Native Kernel Entry Point ---
+__KERNEL__ void ShadertoyKernel(__CONSTANTREF__ ShadertoyParams *params, __TEXTURE2D__ iChannel0, __TEXTURE2D_WRITE__ dst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y);
+    if (x < params->width && y < params->height)
+    {
+        ShadertoyContext ctx;
+        ctx.params = params;
+        ctx.iChannel0 = iChannel0;
+        ctx.iResolution = to_float3(params->iResolution[0], params->iResolution[1], params->iResolution[2]);
+        ctx.iTime = params->iTime;
+        ctx.iTimeDelta = params->iTimeDelta;
+        ctx.iFrame = params->iFrame;
+        ctx.iMouse = to_float4(params->iMouse[0], params->iMouse[1], params->iMouse[2], params->iMouse[3]);
+
+        vec2 fragCoord = to_float2((float)x + 0.5f, (float)y + 0.5f);
+        vec4 fragColor = to_float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+        ctx.mainImage(fragColor, fragCoord);
+
+        _tex2DVec4Write(dst, x, y, fragColor);
+    }
+}
+]]
+
+    return kernel
+end
+
+-- ==============================================================================
+-- 7. FUSION UI CONTROLS CREATION
+-- ==============================================================================
+function Create()
+    self:BeginControlNest("Shadertoy Controls", "ShadertoyNest", true)
+
+        InPreset = self:AddInput("Preset", "Preset", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "ComboControl",
+            INP_Default        = 1.0,
+            INP_Integer        = true,
+            INP_DoNotifyChanged = true,
+            { CCS_AddString = "Custom Shader", },
+            { CCS_AddString = "Preset 1: Plasma & Waves (2D)", },
+            { CCS_AddString = "Preset 2: 3D Raymarching SDF", },
+            { CCS_AddString = "Preset 3: Cyberpunk Neon Grid", },
+        })
+
+        InResetBtn = self:AddInput("Reset Code to Preset", "ResetCode", {
+            INPID_InputControl  = "ButtonControl",
+            INP_DoNotifyChanged = true,
+            INP_External        = false,
+        })
+
+        InTimeScale = self:AddInput("Time Speed (iTime)", "TimeScale", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "SliderControl",
+            INP_Default        = 1.0,
+            INP_MinScale       = -3.0,
+            INP_MaxScale       = 5.0,
+        })
+
+        InTimeOffset = self:AddInput("Time Offset (sec)", "TimeOffset", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "SliderControl",
+            INP_Default        = 0.0,
+            INP_MinScale       = -60.0,
+            INP_MaxScale       = 60.0,
+        })
+
+        InFrameOffset = self:AddInput("Frame Offset (iFrame)", "FrameOffset", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "SliderControl",
+            INP_Default        = 0,
+            INP_Integer        = true,
+            INP_MinScale       = -500,
+            INP_MaxScale       = 500,
+        })
+
+        InMouse = self:AddInput("Mouse Pos (iMouse.xy)", "MousePos", {
+            LINKID_DataType      = "Point",
+            INPID_InputControl   = "OffsetControl",
+            INPID_PreviewControl = "CrosshairControl",
+            INP_DefaultX         = 0.5,
+            INP_DefaultY         = 0.5,
+        })
+
+        InMouseDown = self:AddInput("Mouse Click (iMouse.z > 0)", "MouseDown", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "CheckboxControl",
+            INP_Default        = 0,
+            INP_Integer        = true,
+        })
+
+        InCode = self:AddInput("GLSL Shader Code", "ShaderCode", {
+            LINKID_DataType     = "Text",
+            INPID_InputControl  = "TextEditControl",
+            TEC_Lines           = 24,
+            TEC_Wrap            = false,
+            INP_Default         = PRESET_1_PLASMA,
+            INP_DoNotifyChanged = true,
+        })
+
+    self:EndControlNest()
+
+    -- Optional texture input for iChannel0
+    InChannel0 = self:AddInput("iChannel0 (Texture Input)", "iChannel0", {
+        LINKID_DataType = "Image",
+        LINK_Main       = 1,
+        INP_Required    = false,
+        INP_SendRequest = false,
+    })
+
+    -- OutImage is automatically provided by CT_SourceTool
+end
+
+-- ==============================================================================
+-- 8. NOTIFY CHANGED (PRESET SWITCHING & BUTTONS)
+-- ==============================================================================
+function NotifyChanged(inp, param)
+    if inp == InPreset and param ~= nil then
+        local presetIdx = param.Value
+        if presetIdx == 1 then
+            InCode:SetSource(Text(PRESET_1_PLASMA), 0)
+        elseif presetIdx == 2 then
+            InCode:SetSource(Text(PRESET_2_RAYMARCHING), 0)
+        elseif presetIdx == 3 then
+            InCode:SetSource(Text(PRESET_3_CYBERPUNK), 0)
+        end
+    elseif inp == InResetBtn and param ~= nil and param.Value == 1 then
+        local presetIdx = InPreset:GetSource(0).Value
+        if presetIdx == 1 then
+            InCode:SetSource(Text(PRESET_1_PLASMA), 0)
+        elseif presetIdx == 2 then
+            InCode:SetSource(Text(PRESET_2_RAYMARCHING), 0)
+        elseif presetIdx == 3 then
+            InCode:SetSource(Text(PRESET_3_CYBERPUNK), 0)
+        end
+    end
+end
+
+-- ==============================================================================
+-- 9. PROCESS PIPELINE (RENDER & GPU COMPILATION)
+-- ==============================================================================
+function Process(req)
+    local realwidth = Width
+    local realheight = Height
+
+    -- Adjust dimensions for preview/proxy
+    Width = Width / Scale
+    Height = Height / Scale
+    Scale = 1
+
+    local imgattrs = {
+        IMG_Document          = self.Comp,
+        IMG_Width             = Width,
+        IMG_Height            = Height,
+        IMG_XScale            = XAspect,
+        IMG_YScale            = YAspect,
+        IMAT_OriginalWidth    = realwidth,
+        IMAT_OriginalHeight   = realheight,
+        IMG_Quality           = not req:IsQuick(),
+        IMG_MotionBlurQuality = not req:IsNoMotionBlur(),
+    }
+
+    if not req:IsStampOnly() then
+        imgattrs.IMG_ProxyScale = 1
+    end
+
+    if SourceDepth ~= 0 then
+        imgattrs.IMG_Depth = SourceDepth
+    else
+        imgattrs.IMG_Depth = 8 -- Default to 32-bit float for high dynamic range shader accuracy
+    end
+
+    -- Handle optional iChannel0 input
+    local inImg = InChannel0:GetValue(req)
+    local channel0Img
+    local hasChannel0 = false
+
+    if inImg ~= nil then
+        channel0Img = inImg
+        hasChannel0 = true
+    else
+        channel0Img = Image(imgattrs)
+        channel0Img:Fill(Pixel({R = 0, G = 0, B = 0, A = 1}))
+    end
+
+    -- Allocate output image
+    local dst = Image({IMG_Like = channel0Img, IMG_DeferAlloc = true})
+
+    if req:IsPreCalc() then
+        local out = Image({IMG_Like = dst, IMG_NoData = true})
+        OutImage:Set(req, out)
+        return
+    end
+
+    -- Fetch user controls
+    local code = InCode:GetValue(req).Value
+    local timeScale = InTimeScale:GetValue(req).Value
+    local timeOffset = InTimeOffset:GetValue(req).Value
+    local frameOffset = InFrameOffset:GetValue(req).Value
+    local mouse = InMouse:GetValue(req)
+    local mouseDown = InMouseDown:GetValue(req).Value
+
+    -- Compute timeline timing
+    local framerate = self.Comp:GetPrefs("Comp.FrameFormat.Rate") or 24.0
+    local curTime = req.Time
+    local timeInSeconds = (curTime / framerate) * timeScale + timeOffset
+    local timeDeltaInSeconds = (1.0 / framerate) * timeScale
+    local currentFrame = math.floor(curTime) + frameOffset
+
+    -- Generate full kernel with user shader
+    local kernelSource = BuildFullKernelSource(code)
+
+    -- Create DVIP Compute Node (compiles via Metal on macOS)
+    local node = DVIPComputeNode(req, "ShadertoyKernel", kernelSource, "ShadertoyParams", ShadertoyParams)
+    local success = false
+
+    if node then
+        local params = node:GetParamBlock(ShadertoyParams)
+
+        params.iResolution[0] = realwidth
+        params.iResolution[1] = realheight
+        params.iResolution[2] = (YAspect > 0) and (XAspect / YAspect) or 1.0
+
+        params.iTime = timeInSeconds
+        params.iTimeDelta = timeDeltaInSeconds
+        params.iFrame = currentFrame
+
+        params.iMouse[0] = mouse.X * realwidth
+        params.iMouse[1] = mouse.Y * realheight
+        params.iMouse[2] = (mouseDown > 0.5) and (mouse.X * realwidth) or -1.0
+        params.iMouse[3] = (mouseDown > 0.5) and (mouse.Y * realheight) or -1.0
+
+        params.hasChannel0 = hasChannel0 and 1 or 0
+        params.width = dst.DataWindow:Width()
+        params.height = dst.DataWindow:Height()
+        params.compOrder = 15
+
+        node:SetParamBlock(params)
+
+        node:AddSampler("RowSampler", TEX_FILTER_MODE_LINEAR, TEX_ADDRESS_MODE_CLAMP, TEX_NORMALIZED_COORDS_TRUE)
+        node:AddInput("iChannel0", channel0Img)
+        node:AddOutput("dst", dst)
+
+        success = node:RunSession(req)
+        if not success then
+            local errLog = node:GetErrorLog()
+            print("\n=======================================================")
+            print("[Shadertoy Fuse] GPU Execution Error:")
+            print(tostring(errLog))
+            print("=======================================================\n")
+        end
+    else
+        print("\n=======================================================")
+        print("[Shadertoy Fuse] DVIP Metal Compilation Error!")
+        print("Please check syntax in the Inspector code editor.")
+        print("=======================================================\n")
+    end
+
+    -- Robust visual error fallback (magenta diagnostic) to avoid crashing DaVinci Resolve
+    if not success then
+        dst = Image(imgattrs)
+        -- Diagnostic magenta color
+        dst:Fill(Pixel({R = 0.85, G = 0.05, B = 0.65, A = 1.0}))
+    end
+
+    OutImage:Set(req, dst)
+end
