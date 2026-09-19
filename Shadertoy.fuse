@@ -228,6 +228,8 @@ struct mat2 {
     float2 col0;
     float2 col1;
     mat2() : col0(to_float2(1.0f, 0.0f)), col1(to_float2(0.0f, 1.0f)) {}
+    mat2(float s) : col0(to_float2(s, 0.0f)), col1(to_float2(0.0f, s)) {}
+    mat2(float2 c0, float2 c1) : col0(c0), col1(c1) {}
     mat2(float m00, float m01, float m10, float m11) {
         col0 = to_float2(m00, m01);
         col1 = to_float2(m10, m11);
@@ -238,17 +240,34 @@ inline float2 operator*(mat2 m, float2 v) {
     return to_float2(m.col0.x * v.x + m.col1.x * v.y, m.col0.y * v.x + m.col1.y * v.y);
 }
 
+inline float2 operator*(float2 v, mat2 m) {
+    return to_float2(v.x * m.col0.x + v.y * m.col0.y, v.x * m.col1.x + v.y * m.col1.y);
+}
+
+inline mat2 operator*(mat2 a, mat2 b) {
+    return mat2(
+        a.col0.x * b.col0.x + a.col1.x * b.col0.y,
+        a.col0.y * b.col0.x + a.col1.y * b.col0.y,
+        a.col0.x * b.col1.x + a.col1.x * b.col1.y,
+        a.col0.y * b.col1.x + a.col1.y * b.col1.y
+    );
+}
+
+inline mat2 operator*(mat2 m, float s) { return mat2(m.col0 * s, m.col1 * s); }
+inline mat2 operator*(float s, mat2 m) { return mat2(m.col0 * s, m.col1 * s); }
+
 struct mat3 {
     float3 col0;
     float3 col1;
     float3 col2;
     mat3() : col0(to_float3(1.0f, 0.0f, 0.0f)), col1(to_float3(0.0f, 1.0f, 0.0f)), col2(to_float3(0.0f, 0.0f, 1.0f)) {}
+    mat3(float s) : col0(to_float3(s, 0.0f, 0.0f)), col1(to_float3(0.0f, s, 0.0f)), col2(to_float3(0.0f, 0.0f, s)) {}
+    mat3(float3 c0, float3 c1, float3 c2) : col0(c0), col1(c1), col2(c2) {}
     mat3(float m00, float m01, float m02, float m10, float m11, float m12, float m20, float m21, float m22) {
         col0 = to_float3(m00, m01, m02);
         col1 = to_float3(m10, m11, m12);
         col2 = to_float3(m20, m21, m22);
     }
-    mat3(float3 c0, float3 c1, float3 c2) : col0(c0), col1(c1), col2(c2) {}
 };
 
 inline float3 operator*(mat3 m, float3 v) {
@@ -256,6 +275,51 @@ inline float3 operator*(mat3 m, float3 v) {
         m.col0.x * v.x + m.col1.x * v.y + m.col2.x * v.z,
         m.col0.y * v.x + m.col1.y * v.y + m.col2.y * v.z,
         m.col0.z * v.x + m.col1.z * v.y + m.col2.z * v.z
+    );
+}
+
+inline float3 operator*(float3 v, mat3 m) {
+    return to_float3(
+        v.x * m.col0.x + v.y * m.col0.y + v.z * m.col0.z,
+        v.x * m.col1.x + v.y * m.col1.y + v.z * m.col1.z,
+        v.x * m.col2.x + v.y * m.col2.y + v.z * m.col2.z
+    );
+}
+
+inline mat3 operator*(mat3 m, float s) { return mat3(m.col0 * s, m.col1 * s, m.col2 * s); }
+inline mat3 operator*(float s, mat3 m) { return mat3(m.col0 * s, m.col1 * s, m.col2 * s); }
+
+struct mat4 {
+    float4 col0;
+    float4 col1;
+    float4 col2;
+    float4 col3;
+    mat4() : col0(to_float4(1.0f, 0.0f, 0.0f, 0.0f)),
+             col1(to_float4(0.0f, 1.0f, 0.0f, 0.0f)),
+             col2(to_float4(0.0f, 0.0f, 1.0f, 0.0f)),
+             col3(to_float4(0.0f, 0.0f, 0.0f, 1.0f)) {}
+    mat4(float s) : col0(to_float4(s, 0.0f, 0.0f, 0.0f)),
+                    col1(to_float4(0.0f, s, 0.0f, 0.0f)),
+                    col2(to_float4(0.0f, 0.0f, s, 0.0f)),
+                    col3(to_float4(0.0f, 0.0f, 0.0f, s)) {}
+    mat4(float4 c0, float4 c1, float4 c2, float4 c3) : col0(c0), col1(c1), col2(c2), col3(c3) {}
+};
+
+inline float4 operator*(mat4 m, float4 v) {
+    return to_float4(
+        m.col0.x * v.x + m.col1.x * v.y + m.col2.x * v.z + m.col3.x * v.w,
+        m.col0.y * v.x + m.col1.y * v.y + m.col2.y * v.z + m.col3.y * v.w,
+        m.col0.z * v.x + m.col1.z * v.y + m.col2.z * v.z + m.col3.z * v.w,
+        m.col0.w * v.x + m.col1.w * v.y + m.col2.w * v.z + m.col3.w * v.w
+    );
+}
+
+inline float4 operator*(float4 v, mat4 m) {
+    return to_float4(
+        v.x * m.col0.x + v.y * m.col0.y + v.z * m.col0.z + v.w * m.col0.w,
+        v.x * m.col1.x + v.y * m.col1.y + v.z * m.col1.z + v.w * m.col1.w,
+        v.x * m.col2.x + v.y * m.col2.y + v.z * m.col2.z + v.w * m.col2.w,
+        v.x * m.col3.x + v.y * m.col3.y + v.z * m.col3.z + v.w * m.col3.w
     );
 }
 
@@ -312,6 +376,13 @@ local function PreprocessUserGLSL(glslCode)
     code = code:gsub("inout%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
     -- Normalize 'in <type> <name>' to '<type> %2'
     code = code:gsub("in%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1 %2")
+
+    -- Expand compound assignments on vector swizzles: e.g. p.xz -= .5; -> p.xz = p.xz - (.5);
+    code = code:gsub("([%a_][%w_]*)%.([xyzwrgba][xyzwrgba]+)%s*([%+%-%*/])=%s*([^;\n]+);", "%1.%2 = %1.%2 %3 (%4);")
+
+    -- Clean floating point literals with leading dot, e.g., '.5' -> '0.5f'
+    code = code:gsub("([^%d%w_])%.(%d+)", "%10.%2f")
+    code = code:gsub("^%.(%d+)", "0.%1f")
 
     -- Clean floating point literals without fractional part, e.g., '1.' -> '1.0f'
     code = code:gsub("(%d+)%.([^%d%w_])", "%1.0f%2")

@@ -8,4 +8,9 @@
 | Implement Shadertoy Fuse Generator (`.fuse` + header) | Completed | Shadertoy.fuse implemented with live TextEditControl and DVIP Metal engine |
 | Implement Test Shaders & Presets | Completed | 3 shaders created (Plasma 2D, Raymarching 3D SDF, Cyberpunk Grid) |
 | Create Complete User Guide & Documentation | Completed | README.md complete with installation, usage, and migration guide |
-| Verify and Validate | Completed | Syntax checked with luac, tests passed, installed to ~/Library/.../Fuses |
+| Fix FFI type conversion crash on AddInput | Completed | Replaced numeric INP_Default with INPS_DefaultText for TextEditControl |
+| Fix Metal macro compilation error and empty text box | Completed | Removed #define iChannel0 macro, added INPS_DefaultText, texture overloads, auto-population |
+| Fix Metal address space qualifier error | Completed | Qualified all out/inout reference types with thread (thread vec4& fragColor) required by Metal |
+| Fix GPU kernel caching and preset dependency tracking | Completed | Dynamic hash-based kernel names, registered InPreset in Process dependency graph, live debug logger |
+| Fix Vector-Matrix operator and Swizzle compound assignments | Completed | Added float2*mat2 / mat3 / mat4 operator overloads in CompatibilityHeader; expanded swizzle compound assignments (p.xz -= .5) and float literals (.5 -> 0.5f) in PreprocessUserGLSL |
+| Verify and Validate | Completed | Syntax checked with luac, tests passed, re-installed via install.sh to ~/Library/.../Fuses |

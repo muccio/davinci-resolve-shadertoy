@@ -49,6 +49,7 @@ local examples = {
     "examples/01_plasma_geometric.glsl",
     "examples/02_raymarching_3d_sdf.glsl",
     "examples/03_cyberpunk_neon_grid.glsl",
+    "examples/04_fractal_pyramid.glsl",
 }
 
 print("Running Shadertoy Preprocessor and Kernel Generation tests on example files...")
