@@ -14,3 +14,4 @@
 | Fix GPU kernel caching and preset dependency tracking | Completed | Dynamic hash-based kernel names, registered InPreset in Process dependency graph, live debug logger |
 | Fix Vector-Matrix operator and Swizzle compound assignments | Completed | Added float2*mat2 / mat3 / mat4 operator overloads in CompatibilityHeader; expanded swizzle compound assignments (p.xz -= .5) and float literals (.5 -> 0.5f) in PreprocessUserGLSL |
 | Verify and Validate | Completed | Syntax checked with luac, tests passed, re-installed via install.sh to ~/Library/.../Fuses |
+| Create GitHub repository and push | Completed | Created muccio/davinci-resolve-shadertoy (public), committed .gitignore and pushed main branch |
