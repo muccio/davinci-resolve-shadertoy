@@ -220,113 +220,32 @@ typedef int2 ivec2;
 typedef int3 ivec3;
 typedef int4 ivec4;
 
+#define iChannel0 0
+#define iChannel1 1
+#define iChannel2 2
+#define iChannel3 3
+
 struct mat2 {
     float2 col0;
     float2 col1;
-#ifdef __cplusplus
-    __DEVICE__ mat2() : col0(to_float2(1.0f, 0.0f)), col1(to_float2(0.0f, 1.0f)) {}
-    __DEVICE__ mat2(float m00, float m01, float m10, float m11) {
+    mat2() : col0(to_float2(1.0f, 0.0f)), col1(to_float2(0.0f, 1.0f)) {}
+    mat2(float m00, float m01, float m10, float m11) {
         col0 = to_float2(m00, m01);
         col1 = to_float2(m10, m11);
     }
-#endif
 };
 
-#ifdef __cplusplus
-__DEVICE__ inline float2 operator*(mat2 m, float2 v) {
+inline float2 operator*(mat2 m, float2 v) {
     return to_float2(m.col0.x * v.x + m.col1.x * v.y, m.col0.y * v.x + m.col1.y * v.y);
 }
-#endif
 
-// Vector & Math Helper Intrinsics
-#ifndef fract
-#define fract(x) ((x) - _floorf(x))
-#endif
-#ifndef mod
-#define mod(x, y) ((x) - (y) * _floorf((x)/(y)))
-#endif
+// GLSL mod emulation: x - y * floor(x / y)
+template<typename T, typename U>
+inline T mod(T x, U y) { return x - y * floor(x / y); }
 
-__DEVICE__ inline float2 fract(float2 v) { return to_float2(v.x - _floorf(v.x), v.y - _floorf(v.y)); }
-__DEVICE__ inline float3 fract(float3 v) { return to_float3(v.x - _floorf(v.x), v.y - _floorf(v.y), v.z - _floorf(v.z)); }
-__DEVICE__ inline float4 fract(float4 v) { return to_float4(v.x - _floorf(v.x), v.y - _floorf(v.y), v.z - _floorf(v.z), v.w - _floorf(v.w)); }
-
-__DEVICE__ inline float2 mod(float2 a, float2 b) { return to_float2(mod(a.x, b.x), mod(a.y, b.y)); }
-__DEVICE__ inline float2 mod(float2 a, float b)  { return to_float2(mod(a.x, b), mod(a.y, b)); }
-__DEVICE__ inline float3 mod(float3 a, float3 b) { return to_float3(mod(a.x, b.x), mod(a.y, b.y), mod(a.z, b.z)); }
-__DEVICE__ inline float3 mod(float3 a, float b)  { return to_float3(mod(a.x, b), mod(a.y, b), mod(a.z, b)); }
-
-__DEVICE__ inline float dot(float2 a, float2 b) { return a.x * b.x + a.y * b.y; }
-__DEVICE__ inline float dot(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-__DEVICE__ inline float dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
-
-__DEVICE__ inline float length(float2 v) { return _sqrtf(dot(v, v)); }
-__DEVICE__ inline float length(float3 v) { return _sqrtf(dot(v, v)); }
-__DEVICE__ inline float length(float4 v) { return _sqrtf(dot(v, v)); }
-
-__DEVICE__ inline float distance(float2 a, float2 b) { return length(a - b); }
-__DEVICE__ inline float distance(float3 a, float3 b) { return length(a - b); }
-
-__DEVICE__ inline float2 normalize(float2 v) { float l = length(v); return l > 0.0f ? v / l : to_float2(0.0f, 0.0f); }
-__DEVICE__ inline float3 normalize(float3 v) { float l = length(v); return l > 0.0f ? v / l : to_float3(0.0f, 0.0f, 0.0f); }
-__DEVICE__ inline float4 normalize(float4 v) { float l = length(v); return l > 0.0f ? v / l : to_float4(0.0f, 0.0f, 0.0f, 0.0f); }
-
-__DEVICE__ inline float3 cross(float3 a, float3 b) {
-    return to_float3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-}
-
-__DEVICE__ inline float3 reflect(float3 i, float3 n) {
-    return i - 2.0f * dot(n, i) * n;
-}
-
-#define mix(a, b, t) _mix(a, b, t)
-#define clamp(x, a, b) _clampf(x, a, b)
-#define step(edge, x) ((x) >= (edge) ? 1.0f : 0.0f)
-#define abs(x) _fabs(x)
-#define sqrt(x) _sqrtf(x)
-#define sin(x) _sinf(x)
-#define cos(x) _cosf(x)
-#define tan(x) _tanf(x)
-#define atan(y, x) _atan2f(y, x)
-#define pow(x, y) _powf(x, y)
-#define exp(x) _expf(x)
-#define log(x) _logf(x)
-#define floor(x) _floorf(x)
-#define ceil(x) _ceilf(x)
-#define min(a, b) _fminf(a, b)
-#define max(a, b) _fmaxf(a, b)
-
-__DEVICE__ inline float2 abs(float2 v) { return to_float2(_fabs(v.x), _fabs(v.y)); }
-__DEVICE__ inline float3 abs(float3 v) { return to_float3(_fabs(v.x), _fabs(v.y), _fabs(v.z)); }
-__DEVICE__ inline float4 abs(float4 v) { return to_float4(_fabs(v.x), _fabs(v.y), _fabs(v.z), _fabs(v.w)); }
-
-__DEVICE__ inline float2 sin(float2 v) { return to_float2(_sinf(v.x), _sinf(v.y)); }
-__DEVICE__ inline float3 sin(float3 v) { return to_float3(_sinf(v.x), _sinf(v.y), _sinf(v.z)); }
-__DEVICE__ inline float4 sin(float4 v) { return to_float4(_sinf(v.x), _sinf(v.y), _sinf(v.z), _sinf(v.w)); }
-
-__DEVICE__ inline float2 cos(float2 v) { return to_float2(_cosf(v.x), _cosf(v.y)); }
-__DEVICE__ inline float3 cos(float3 v) { return to_float3(_cosf(v.x), _cosf(v.y), _cosf(v.z)); }
-__DEVICE__ inline float4 cos(float4 v) { return to_float4(_cosf(v.x), _cosf(v.y), _cosf(v.z), _cosf(v.w)); }
-
-__DEVICE__ inline float smoothstep(float edge0, float edge1, float x) {
-    float t = _clampf((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-
-// Vector Overloaded Constructors
-#ifdef __cplusplus
-__DEVICE__ inline float2 vec2(float s) { return to_float2(s, s); }
-__DEVICE__ inline float2 vec2(float x, float y) { return to_float2(x, y); }
-__DEVICE__ inline float3 vec3(float s) { return to_float3(s, s, s); }
-__DEVICE__ inline float3 vec3(float x, float y, float z) { return to_float3(x, y, z); }
-__DEVICE__ inline float3 vec3(float2 v, float z) { return to_float3(v.x, v.y, z); }
-__DEVICE__ inline float3 vec3(float x, float2 v) { return to_float3(x, v.x, v.y); }
-__DEVICE__ inline float4 vec4(float s) { return to_float4(s, s, s, s); }
-__DEVICE__ inline float4 vec4(float x, float y, float z, float w) { return to_float4(x, y, z, w); }
-__DEVICE__ inline float4 vec4(float3 v, float w) { return to_float4(v.x, v.y, v.z, w); }
-__DEVICE__ inline float4 vec4(float x, float3 v) { return to_float4(x, v.x, v.y, v.z); }
-__DEVICE__ inline float4 vec4(float2 a, float2 b) { return to_float4(a.x, a.y, b.x, b.y); }
-__DEVICE__ inline float4 vec4(float2 a, float b, float c) { return to_float4(a.x, a.y, b, c); }
-#endif
+// GLSL 2-argument atan -> Metal atan2
+inline float atan(float y, float x) { return atan2(y, x); }
+inline float2 atan(float2 y, float2 x) { return atan2(y, x); }
 ]=]
 
 -- ==============================================================================
@@ -373,7 +292,7 @@ struct ShadertoyContext {
     float4 iMouse;
 
     // Helper for texture sampling
-    __DEVICE__ inline float4 texture(int ch, vec2 uv) {
+    inline float4 texture(int ch, vec2 uv) {
         return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
     }
 
@@ -479,44 +398,59 @@ function Create()
             INPID_InputControl  = "TextEditControl",
             TEC_Lines           = 24,
             TEC_Wrap            = false,
-            INP_Default         = PRESET_1_PLASMA,
+            INP_DefaultText     = PRESET_1_PLASMA,
             INP_DoNotifyChanged = true,
         })
 
     self:EndControlNest()
 
     -- Optional texture input for iChannel0
-    InChannel0 = self:AddInput("iChannel0 (Texture Input)", "iChannel0", {
+    InChannel0 = self:AddInput("iChannel0", "iChannel0", {
         LINKID_DataType = "Image",
         LINK_Main       = 1,
         INP_Required    = false,
         INP_SendRequest = false,
     })
 
-    -- OutImage is automatically provided by CT_SourceTool
+    OutImage = self:AddOutput("Output", "Output", {
+        LINKID_DataType = "Image",
+        LINK_Main       = 1,
+    })
+end
+
+local function MakeText(s)
+    if type(Text) == "function" then
+        return Text(s)
+    else
+        return s
+    end
 end
 
 -- ==============================================================================
 -- 8. NOTIFY CHANGED (PRESET SWITCHING & BUTTONS)
 -- ==============================================================================
-function NotifyChanged(inp, param)
+function NotifyChanged(inp, param, time)
+    if InCode == nil then return end
     if inp == InPreset and param ~= nil then
-        local presetIdx = param.Value
+        local presetIdx = math.floor(param.Value)
         if presetIdx == 1 then
-            InCode:SetSource(Text(PRESET_1_PLASMA), 0)
+            InCode:SetSource(MakeText(PRESET_1_PLASMA), 0)
         elseif presetIdx == 2 then
-            InCode:SetSource(Text(PRESET_2_RAYMARCHING), 0)
+            InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), 0)
         elseif presetIdx == 3 then
-            InCode:SetSource(Text(PRESET_3_CYBERPUNK), 0)
+            InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), 0)
         end
     elseif inp == InResetBtn and param ~= nil and param.Value == 1 then
-        local presetIdx = InPreset:GetSource(0).Value
+        local presetIdx = 1
+        if InPreset and InPreset:GetSource(0) ~= nil then
+            presetIdx = math.floor(InPreset:GetSource(0).Value)
+        end
         if presetIdx == 1 then
-            InCode:SetSource(Text(PRESET_1_PLASMA), 0)
+            InCode:SetSource(MakeText(PRESET_1_PLASMA), 0)
         elseif presetIdx == 2 then
-            InCode:SetSource(Text(PRESET_2_RAYMARCHING), 0)
+            InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), 0)
         elseif presetIdx == 3 then
-            InCode:SetSource(Text(PRESET_3_CYBERPUNK), 0)
+            InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), 0)
         end
     end
 end
@@ -555,8 +489,11 @@ function Process(req)
         imgattrs.IMG_Depth = 8 -- Default to 32-bit float for high dynamic range shader accuracy
     end
 
-    -- Handle optional iChannel0 input
-    local inImg = InChannel0:GetValue(req)
+    -- Handle optional iChannel0 input safely
+    local inImg = nil
+    if InChannel0 then
+        inImg = InChannel0:GetValue(req)
+    end
     local channel0Img
     local hasChannel0 = false
 
@@ -573,12 +510,20 @@ function Process(req)
 
     if req:IsPreCalc() then
         local out = Image({IMG_Like = dst, IMG_NoData = true})
-        OutImage:Set(req, out)
+        if OutImage then
+            OutImage:Set(req, out)
+        end
         return
     end
 
-    -- Fetch user controls
-    local code = InCode:GetValue(req).Value
+    -- Fetch user controls safely
+    local code = ""
+    if InCode and InCode:GetValue(req) ~= nil then
+        code = InCode:GetValue(req).Value or ""
+    end
+    if code == nil or code == "" then
+        code = PRESET_1_PLASMA
+    end
     local timeScale = InTimeScale:GetValue(req).Value
     local timeOffset = InTimeOffset:GetValue(req).Value
     local frameOffset = InFrameOffset:GetValue(req).Value
