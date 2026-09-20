@@ -355,6 +355,108 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 }
 ]=]
 
+local PRESET_7_VHS = [=[// Preset 7: Vintage VHS Tracking Distortion & Noise Glitch
+// Simplex 2D noise waves, horizontal displacement, scanlines and chromatic color bleeding.
+// Connect video to iChannel0 for an authentic analog VHS tape look!
+
+vec3 mod289(vec3 x) {
+    return x - floor(x * (1.0 / 289.0)) * 289.0;
+}
+
+vec2 mod289(vec2 x) {
+    return x - floor(x * (1.0 / 289.0)) * 289.0;
+}
+
+vec3 permute(vec3 x) {
+    return mod289(((x * 34.0) + 1.0) * x);
+}
+
+float snoise(vec2 v) {
+    const vec4 C = vec4(0.211324865405187,  // (3.0-sqrt(3.0))/6.0
+                        0.366025403784439,  // 0.5*(sqrt(3.0)-1.0)
+                       -0.577350269189626,  // -1.0 + 2.0 * C.x
+                        0.024390243902439); // 1.0 / 41.0
+    // First corner
+    vec2 i  = floor(v + dot(v, C.yy));
+    vec2 x0 = v -   i + dot(i, C.xx);
+
+    // Other corners
+    vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec4 x12 = x0.xyxy + C.xxzz;
+    x12.xy -= i1;
+
+    // Permutations
+    i = mod289(i);
+    vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));
+
+    vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);
+    m = m * m;
+    m = m * m;
+
+    // Gradients: 41 points uniformly over a line, mapped onto a diamond.
+    vec3 x = 2.0 * fract(p * C.www) - 1.0;
+    vec3 h = abs(x) - 0.5;
+    vec3 ox = floor(x + 0.5);
+    vec3 a0 = x - ox;
+
+    // Normalise gradients implicitly by scaling m
+    m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+
+    // Compute final noise value at P
+    vec3 g;
+    g.x  = a0.x  * x0.x  + h.x  * x0.y;
+    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+    return 130.0 * dot(m, g);
+}
+
+float rand(vec2 co) {
+    return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord.xy / iResolution.xy;
+    float time = iTime * 2.0;
+
+    // Create large, incidental noise waves
+    float noise = max(0.0, snoise(vec2(time, uv.y * 0.3)) - 0.3) * (1.0 / 0.7);
+
+    // Offset by smaller, constant noise waves
+    noise = noise + (snoise(vec2(time * 10.0, uv.y * 2.4)) - 0.5) * 0.15;
+
+    // Apply the noise as x displacement for every line
+    float xpos = uv.x - noise * noise * 0.25;
+    vec4 src = texture(iChannel0, vec2(xpos, uv.y));
+
+    // Fallback pattern if iChannel0 is not connected
+    if (src.a < 0.01 || (src.r == 0.0 && src.g == 0.0 && src.b == 0.0)) {
+        float bar = floor(uv.x * 7.0);
+        vec3 barColor = vec3(0.1);
+        if (bar == 0.0) barColor = vec3(0.8, 0.8, 0.8);
+        else if (bar == 1.0) barColor = vec3(0.8, 0.8, 0.0);
+        else if (bar == 2.0) barColor = vec3(0.0, 0.8, 0.8);
+        else if (bar == 3.0) barColor = vec3(0.0, 0.8, 0.0);
+        else if (bar == 4.0) barColor = vec3(0.8, 0.0, 0.8);
+        else if (bar == 5.0) barColor = vec3(0.8, 0.0, 0.0);
+        else barColor = vec3(0.0, 0.0, 0.8);
+        src = vec4(barColor, 1.0);
+    }
+
+    fragColor = src;
+
+    // Mix in random static noise interference
+    fragColor.rgb = mix(fragColor.rgb, vec3(rand(vec2(uv.y * time, time))), noise * 0.3);
+
+    // Apply horizontal scanline pattern every 4 pixels
+    if (floor(mod(fragCoord.y * 0.25, 2.0)) == 0.0) {
+        fragColor.rgb *= 1.0 - (0.15 * noise);
+    }
+
+    // Chromatic aberration / color fringing shift on green and blue channels
+    fragColor.g = mix(fragColor.r, texture(iChannel0, vec2(xpos + noise * 0.05, uv.y)).g, 0.25);
+    fragColor.b = mix(fragColor.r, texture(iChannel0, vec2(xpos - noise * 0.05, uv.y)).b, 0.25);
+}
+]=]
+
 -- ==============================================================================
 -- 4. GLSL / METAL COMPATIBILITY HEADER
 -- ==============================================================================
@@ -528,40 +630,47 @@ local function PreprocessUserGLSL(glslCode)
 
     local code = glslCode
 
-    -- Strip #version directives
-    code = code:gsub("#version%s+.*", "")
+    -- 1. Strip multi-line comments /* ... */ while preserving exact line count
+    code = code:gsub("/%*(.-)%*/", function(comment)
+        return comment:gsub("[^\n]", "")
+    end)
 
-    -- Strip precision directives
+    -- 2. Strip single-line comments // ... without removing the newline
+    code = code:gsub("//[^\r\n]*", "")
+
+    -- 3. Strip #version directives
+    code = code:gsub("#version[^\r\n]*", "")
+
+    -- 4. Strip precision directives
     code = code:gsub("precision%s+[%w_]+%s+[%w_]+%s*;", "")
     code = code:gsub("%f[%w]highp%f[%W]", "")
     code = code:gsub("%f[%w]mediump%f[%W]", "")
     code = code:gsub("%f[%w]lowp%f[%W]", "")
 
-    -- Comment out user-declared uniform lines that would collide with struct members
-    code = code:gsub("uniform%s+.-;", "// %0")
+    -- 5. Comment out user-declared uniform lines that would collide with struct members
+    code = code:gsub("%f[%w]uniform%s+[^;\r\n]+;", "")
 
-    -- Normalize 'out vec4 <name>' to 'thread vec4& <name>' (explicit thread address space required by Apple Metal)
-    code = code:gsub("out%s+vec4%s+([%a_][%w_]*)", "thread vec4& %1")
-    -- Normalize generic 'out <type> <name>' to 'thread <type>& <name>'
-    code = code:gsub("out%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
-    -- Normalize 'inout <type> <name>' to 'thread <type>& <name>'
-    code = code:gsub("inout%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
-    -- Normalize 'in <type> <name>' to '<type> %2'
-    code = code:gsub("in%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1 %2")
+    -- 6. Normalize parameter qualifiers
+    -- inout <type> <name> -> thread <type>& <name>
+    code = code:gsub("%f[%w]inout%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
+    -- out vec4 <name> -> thread vec4& <name>
+    code = code:gsub("%f[%w]out%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "thread %1& %2")
+    -- in <type> <name> -> <type> %2 (only within parameter lists or declarations)
+    code = code:gsub("%f[%w]in%s+([%a_][%w_]*)%s+([%a_][%w_]*)", "%1 %2")
 
-    -- Expand compound assignments on vector swizzles: e.g. p.xz -= .5; -> p.xz = p.xz - (.5);
-    code = code:gsub("([%a_][%w_]*)%.([xyzwrgba][xyzwrgba]+)%s*([%+%-%*/])=%s*([^;\n]+);", "%1.%2 = %1.%2 %3 (%4);")
+    -- 7. Expand compound assignments on vector swizzles: e.g. p.xz -= .5; -> p.xz = p.xz - (.5);
+    code = code:gsub("([%a_][%w_]*)%.([xyzwrgba][xyzwrgba]+)%s*([%+%-%*/])=%s*([^;\r\n]+);", "%1.%2 = %1.%2 %3 (%4);")
 
-    -- Clean floating point literals with leading dot, e.g., '.5' -> '0.5f'
+    -- 8. Clean floating point literals with leading dot, e.g., '.5' -> '0.5f'
     code = code:gsub("([^%d%w_])%.(%d+)", "%10.%2f")
     code = code:gsub("^%.(%d+)", "0.%1f")
 
-    -- Clean floating point literals without fractional part, e.g., '1.' -> '1.0f'
-    code = code:gsub("(%d+)%.([^%d%w_])", "%1.0f%2")
-    code = code:gsub("(%d+)%.\n", "%1.0f\n")
-    code = code:gsub("(%d+)%.$", "%1.0f")
+    -- 9. Clean floating point literals without fractional part, e.g., '1.' -> '1.0f'
+    code = code:gsub("%f[%w](%d+)%.([^%d%w_])", "%1.0f%2")
+    code = code:gsub("%f[%w](%d+)%.\r?\n", "%1.0f\n")
+    code = code:gsub("%f[%w](%d+)%.$", "%1.0f")
 
-    -- Support classic GLSL shaders with void main() instead of void mainImage()
+    -- 10. Support classic GLSL shaders with void main() instead of void mainImage()
     if code:find("void%s+mainImage") == nil and code:find("void%s+main%s*%(") ~= nil then
         code = code .. "\n    void mainImage(thread vec4& fragColor, vec2 fragCoord) { this->gl_FragCoord = fragCoord; this->gl_FragColor = to_float4(0.0f, 0.0f, 0.0f, 1.0f); main(); fragColor = this->gl_FragColor; }\n"
     end
@@ -585,6 +694,67 @@ local function DebugLog(msg)
     end
 end
 
+-- Inspects DaVinci Resolve engine log to extract detailed compiler errors
+local function GetLatestCompilerError(kernelName, prefixLines)
+    local home = os.getenv("HOME") or ""
+    local possiblePaths = {
+        home .. "/Library/Application Support/Blackmagic Design/DaVinci Resolve/logs/davinci_resolve.log",
+        (os.getenv("APPDATA") or "") .. "/Blackmagic Design/DaVinci Resolve/Support/logs/davinci_resolve.log",
+        home .. "/.local/share/DaVinciResolve/logs/davinci_resolve.log",
+    }
+    local content = nil
+    for _, path in ipairs(possiblePaths) do
+        local f = io.open(path, "r")
+        if f then
+            local size = f:seek("end")
+            local readSize = math.min(size, 65536)
+            f:seek("set", math.max(0, size - readSize))
+            content = f:read("*a")
+            f:close()
+            if content and #content > 0 then break end
+        end
+    end
+
+    if not content then
+        return "✗ Metal GPU kernel failed to compile.\nPlease check shader syntax and variable types."
+    end
+
+    -- Find the last occurrence of "Metal Error Message:"
+    local lastMsg = nil
+    local searchIdx = 1
+    while true do
+        local s, e = content:find("Metal Error Message:%s*", searchIdx)
+        if not s then break end
+        local rest = content:sub(e + 1)
+        local endPos = rest:find("\n%s*[%w_]+%s*|") or rest:find("\n%s*%-%-%-") or rest:find("\n0x")
+        if endPos then
+            lastMsg = rest:sub(1, endPos - 1)
+        else
+            lastMsg = rest:sub(1, 1000)
+        end
+        searchIdx = e + 1
+    end
+
+    if not lastMsg or #lastMsg == 0 then
+        return "✗ Metal GPU kernel failed to compile.\nPlease check shader syntax and variable types."
+    end
+
+    -- Remap program_source:(line):(col) to user code Line (line - prefixLines):(col)
+    local formatted = lastMsg:gsub("program_source:(%d+):(%d+):", function(lineStr, colStr)
+        local line = tonumber(lineStr)
+        local col = tonumber(colStr)
+        if prefixLines and line and line > prefixLines then
+            return string.format("Line %d:%d:", line - prefixLines, col)
+        else
+            return string.format("Kernel Line %d:%d:", line or 0, col or 0)
+        end
+    end)
+    formatted = formatted:gsub("\r\n", "\n")
+    formatted = formatted:gsub("\n%s*\n%s*\n", "\n\n")
+    formatted = formatted:gsub("^%s+", ""):gsub("%s+$", "")
+    return "✗ Metal Error:\n" .. formatted
+end
+
 -- ==============================================================================
 -- 6. KERNEL CODE GENERATOR
 -- ==============================================================================
@@ -592,8 +762,7 @@ local function BuildFullKernelSource(userGLSL, kernelName)
     local kName = kernelName or "ShadertoyKernel"
     local processedGLSL = PreprocessUserGLSL(userGLSL)
 
-    local kernel = CompatibilityHeader .. "\n"
-    kernel = kernel .. [[
+    local prefix = CompatibilityHeader .. "\n" .. [[
 // --- Unified Shadertoy Scope Wrapper ---
 struct ShadertoyContext {
     __CONSTANTREF__ ShadertoyParams *params;
@@ -667,7 +836,10 @@ struct ShadertoyContext {
     }
 
     // Insert user shader code here
-]] .. processedGLSL .. [[
+]]
+    local _, prefixLines = prefix:gsub("\n", "\n")
+
+    local kernel = prefix .. processedGLSL .. [[
 
 };
 
@@ -716,7 +888,7 @@ __KERNEL__ void ]] .. kName .. [[(
 }
 ]]
 
-    return kernel
+    return kernel, prefixLines
 end
 
 -- ==============================================================================
@@ -739,6 +911,7 @@ function Create()
             { CCS_AddString = "Preset 4: Fractal Pyramid (3D)", },
             { CCS_AddString = "Preset 5: Texture Ripple & Warp (iChannel0)", },
             { CCS_AddString = "Preset 6: CRT Scanlines & Glitch (iChannel0)", },
+            { CCS_AddString = "Preset 7: VHS Glitch & Scanlines (iChannel0)", },
         })
 
         InResetBtn = self:AddInput("Reset Code to Preset", "ResetCode", {
@@ -790,10 +963,21 @@ function Create()
         InCode = self:AddInput("GLSL Shader Code", "ShaderCode", {
             LINKID_DataType     = "Text",
             INPID_InputControl  = "TextEditControl",
-            TEC_Lines           = 24,
+            TEC_Lines           = 22,
             TEC_Wrap            = false,
             INPS_DefaultText    = PRESET_1_PLASMA,
             INP_DoNotifyChanged = true,
+        })
+
+        InCompilerStatus = self:AddInput("Compiler Status", "CompilerStatus", {
+            LINKID_DataType    = "Text",
+            INPID_InputControl = "TextEditControl",
+            TEC_Lines          = 5,
+            TEC_Wrap           = true,
+            TEC_ReadOnly       = true,
+            INP_External       = false,
+            INP_Passive        = true,
+            INPS_DefaultText   = "✓ Ready. Shader compiled successfully.",
         })
 
     self:EndControlNest()
@@ -940,6 +1124,8 @@ function NotifyChanged(inp, param, time)
             InCode:SetSource(MakeText(PRESET_5_RIPPLE), t)
         elseif presetIdx == 6 then
             InCode:SetSource(MakeText(PRESET_6_CRT), t)
+        elseif presetIdx == 7 then
+            InCode:SetSource(MakeText(PRESET_7_VHS), t)
         end
     elseif inp == InResetBtn and param ~= nil and param.Value == 1 then
         local presetIdx = 1
@@ -962,6 +1148,8 @@ function NotifyChanged(inp, param, time)
             InCode:SetSource(MakeText(PRESET_5_RIPPLE), t)
         elseif presetIdx == 6 then
             InCode:SetSource(MakeText(PRESET_6_CRT), t)
+        elseif presetIdx == 7 then
+            InCode:SetSource(MakeText(PRESET_7_VHS), t)
         end
     end
 end
@@ -1136,7 +1324,7 @@ function Process(req)
     -- Dynamic unique kernel name per shader hash to prevent stale GPU caching
     local kernelHash = SimpleHash(code)
     local kernelName = "ShadertoyKernel_" .. kernelHash
-    local kernelSource = BuildFullKernelSource(code, kernelName)
+    local kernelSource, prefixLines = BuildFullKernelSource(code, kernelName)
 
     DebugLog(string.format("Process: Time=%s, presetVal=%d, codeLen=%d, kernel=%s, in0=%s, in1=%s",
         tostring(curTime), presetVal, #code, kernelName, tostring(inImg0 ~= nil), tostring(inImg1 ~= nil)))
@@ -1144,6 +1332,7 @@ function Process(req)
     -- Create DVIP Compute Node (compiles via Metal on macOS)
     local node = DVIPComputeNode(req, kernelName, kernelSource, "ShadertoyParams", ShadertoyParams)
     local success = false
+    local statusMsg = ""
 
     if node then
         local params = node:GetParamBlock(ShadertoyParams)
@@ -1196,20 +1385,34 @@ function Process(req)
         success = node:RunSession(req)
         if not success then
             local errLog = node:GetErrorLog()
+            statusMsg = "✗ GPU Execution Error:\n" .. tostring(errLog)
             DebugLog("Process GPU Execution Error: " .. tostring(errLog))
             print("\n=======================================================")
             print("[Shadertoy Fuse] GPU Execution Error:")
             print(tostring(errLog))
             print("=======================================================\n")
         else
+            statusMsg = string.format("✓ Ready. Metal GPU shader running (%.1f FPS)", framerate)
             DebugLog("Process: RunSession SUCCESS for " .. kernelName)
         end
     else
-        DebugLog("Process DVIP Metal Compilation Error for " .. kernelName)
+        local compErr = GetLatestCompilerError(kernelName, prefixLines)
+        statusMsg = compErr or ("✗ Metal Compilation Error for " .. kernelName .. "\nPlease check syntax in the Inspector code editor.")
+        DebugLog("Process DVIP Metal Compilation Error for " .. kernelName .. ": " .. statusMsg)
         print("\n=======================================================")
         print("[Shadertoy Fuse] DVIP Metal Compilation Error for " .. kernelName)
-        print("Please check syntax in the Inspector code editor.")
+        print(statusMsg)
         print("=======================================================\n")
+    end
+
+    -- Update compiler status console in Inspector if message changed
+    if self.LastStatusText ~= statusMsg then
+        self.LastStatusText = statusMsg
+        if InCompilerStatus then
+            pcall(function()
+                InCompilerStatus:SetSource(MakeText(statusMsg), req.Time or 0)
+            end)
+        end
     end
 
     -- Robust visual error fallback (magenta diagnostic) to avoid crashing DaVinci Resolve

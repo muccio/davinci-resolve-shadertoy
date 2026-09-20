@@ -52,41 +52,46 @@
 				},
 				Input9 = InstanceInput {
 					SourceOp = "Shadertoy1",
+					Source = "CompilerStatus",
+					Name = "Compiler Status",
+				},
+				Input10 = InstanceInput {
+					SourceOp = "Shadertoy1",
 					Source = "OutputResolution",
 					Name = "Output Resolution",
 					Default = 0,
 				},
-				Input10 = InstanceInput {
+				Input11 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "CustomWidth",
 					Name = "Custom Width",
 					Default = 1920,
 				},
-				Input11 = InstanceInput {
+				Input12 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "CustomHeight",
 					Name = "Custom Height",
 					Default = 1080,
 				},
-				Input12 = InstanceInput {
+				Input13 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "Wrap0",
 					Name = "iChannel0 Wrap",
 					Default = 1,
 				},
-				Input13 = InstanceInput {
+				Input14 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "Wrap1",
 					Name = "iChannel1 Wrap",
 					Default = 1,
 				},
-				Input14 = InstanceInput {
+				Input15 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "Wrap2",
 					Name = "iChannel2 Wrap",
 					Default = 1,
 				},
-				Input15 = InstanceInput {
+				Input16 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "Wrap3",
 					Name = "iChannel3 Wrap",
