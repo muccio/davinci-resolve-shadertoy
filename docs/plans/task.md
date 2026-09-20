@@ -15,3 +15,5 @@
 | Fix Vector-Matrix operator and Swizzle compound assignments | Completed | Added float2*mat2 / mat3 / mat4 operator overloads in CompatibilityHeader; expanded swizzle compound assignments (p.xz -= .5) and float literals (.5 -> 0.5f) in PreprocessUserGLSL |
 | Verify and Validate | Completed | Syntax checked with luac, tests passed, re-installed via install.sh to ~/Library/.../Fuses |
 | Create GitHub repository and push | Completed | Created muccio/davinci-resolve-shadertoy (public), committed .gitignore and pushed main branch |
+| Extend Plugin with Multi-Channel Inputs (iChannel0..3) | Completed | 4 native image inputs, ShadertoyChannel struct, texture/texelFetch/textureSize/wrapCoords overloads, iChannelResolution[4], iChannelTime[4], resolution & wrap controls, 2 new presets |
+| Verify and install multi-channel update | Completed | Tested with luac and test_preprocessor.lua (all 6 shaders passed), installed via install.sh, verified sha256 |

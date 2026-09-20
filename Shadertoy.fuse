@@ -8,8 +8,10 @@ directly in DaVinci Resolve's Fusion page and Edit page timeline.
 Architecture:
 - Fusion DCTL Fuse (CT_SourceTool)
 - DVIP Compute Engine (compiled at runtime via Apple Metal on macOS)
+- Multi-channel input ports (iChannel0, iChannel1, iChannel2, iChannel3)
 - Multi-line TextEditControl Inspector UI
-- Full uniform mapping: iResolution, iTime, iTimeDelta, iFrame, iMouse, iChannel0
+- Full uniform mapping: iResolution, iTime, iTimeDelta, iFrame, iMouse,
+  iChannelResolution[4], iChannelTime[4]
 - Built-in GLSL compatibility layer and presets
 - Fault-tolerant error handling with non-crashing visual fallback
 ==============================================================================
@@ -25,7 +27,7 @@ FuRegisterClass("ShadertoyFuse", CT_SourceTool, {
     REGS_OpDescription = "Execute real-time Shadertoy fragment shaders inside DaVinci Resolve",
     REGS_Company       = "Custom Native",
     REGS_URL           = "https://www.shadertoy.com",
-    REG_Version        = 100,
+    REG_Version        = 101,
 
     REG_NoObjMatCtrls      = true,
     REG_NoMotionBlurCtrls  = true,
@@ -50,6 +52,12 @@ ShadertoyParams = [[
     int iFrame;
     float iMouse[4];
     int hasChannel0;
+    int hasChannel1;
+    int hasChannel2;
+    int hasChannel3;
+    float iChannelResolution[12];
+    float iChannelTime[4];
+    int channelWrap[4];
     int width;
     int height;
     int compOrder;
@@ -98,54 +106,57 @@ float sdTorus(vec3 p, vec2 t) {
     return length(q) - t.y;
 }
 
-float sceneSDF(vec3 p) {
-    float sphere = sdSphere(p, 0.8 + 0.08 * sin(iTime * 2.5));
-    vec3 tp = p;
-    tp.xy = rot2D(iTime * 0.7) * tp.xy;
-    tp.yz = rot2D(iTime * 0.5) * tp.yz;
-    float torus = sdTorus(tp, vec2(1.3, 0.22));
-    return min(sphere, torus);
+float map(vec3 p) {
+    vec3 spherePos = p - vec3(0.0, 0.0, 0.0);
+    float sphere = sdSphere(spherePos, 1.0);
+
+    vec3 torusPos = p - vec3(0.0, 0.0, 0.0);
+    torusPos.xz = rot2D(iTime * 0.5) * torusPos.xz;
+    torusPos.xy = rot2D(iTime * 0.7) * torusPos.xy;
+    float torus = sdTorus(torusPos, vec2(1.7, 0.25));
+
+    float ground = p.y + 1.5;
+
+    return min(min(sphere, torus), ground);
 }
 
 vec3 calcNormal(vec3 p) {
-    const float h = 0.001;
-    const vec2 k = vec2(1.0, -1.0);
-    return normalize(
-        k.xyy * sceneSDF(p + k.xyy * h) +
-        k.yyx * sceneSDF(p + k.yyx * h) +
-        k.yxy * sceneSDF(p + k.yxy * h) +
-        k.xxx * sceneSDF(p + k.xxx * h)
-    );
+    float h = 0.001;
+    vec2 k = vec2(1.0, -1.0);
+    return normalize(k.xyy * map(p + k.xyy * h) +
+                     k.yyx * map(p + k.yyx * h) +
+                     k.yxy * map(p + k.yxy * h) +
+                     k.xxx * map(p + k.xxx * h));
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
     vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
-    vec2 mouse = (iMouse.xy - 0.5 * iResolution.xy) / iResolution.y;
 
-    vec3 ro = vec3(0.0, 0.0, -3.6);
+    vec3 ro = vec3(0.0, 1.0, -4.5);
     vec3 rd = normalize(vec3(uv, 1.2));
 
+    // Optional mouse interaction
     if (iMouse.z > 0.0) {
-        ro.yz = rot2D(mouse.y * 3.0) * ro.yz;
-        ro.xz = rot2D(-mouse.x * 3.0) * ro.xz;
-        rd.yz = rot2D(mouse.y * 3.0) * rd.yz;
-        rd.xz = rot2D(-mouse.x * 3.0) * rd.xz;
+        vec2 m = (iMouse.xy / iResolution.xy) * 3.14 - 1.57;
+        ro.yz = rot2D(-m.y) * ro.yz;
+        ro.xz = rot2D(-m.x) * ro.xz;
+        rd.yz = rot2D(-m.y) * rd.yz;
+        rd.xz = rot2D(-m.x) * rd.xz;
     } else {
-        ro.xz = rot2D(iTime * 0.35) * ro.xz;
-        rd.xz = rot2D(iTime * 0.35) * rd.xz;
+        ro.xz = rot2D(iTime * 0.2) * ro.xz;
+        rd.xz = rot2D(iTime * 0.2) * rd.xz;
     }
 
     float t = 0.0;
-    float d = 0.0;
     for (int i = 0; i < 80; i++) {
         vec3 p = ro + rd * t;
-        d = sceneSDF(p);
-        if (d < 0.001 || t > 20.0) break;
+        float d = map(p);
         t += d;
+        if (d < 0.001 || t > 20.0) break;
     }
 
-    vec3 col = mix(vec3(0.04, 0.04, 0.12), vec3(0.12, 0.18, 0.32), uv.y + 0.5);
+    vec3 col = vec3(0.05, 0.07, 0.12) - max(rd.y, 0.0) * 0.03;
 
     if (t < 20.0) {
         vec3 p = ro + rd * t;
@@ -205,6 +216,142 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     col += vec3(0.0, 0.85, 1.0) * clamp(horizonGlow, 0.0, 1.0);
 
     fragColor = vec4(col, 1.0);
+}
+]=]
+
+local PRESET_4_FRACTAL = [=[// Preset 4: 3D Fractal Pyramid Raymarching
+vec3 palette(float d) {
+    return mix(vec3(0.2, 0.7, 0.9), vec3(1.0, 0.0, 1.0), d);
+}
+
+vec2 rotate(vec2 p, float a) {
+    float c = cos(a);
+    float s = sin(a);
+    return p * mat2(c, s, -s, c);
+}
+
+float map(vec3 p) {
+    for (int i = 0; i < 8; ++i) {
+        float t = iTime * 0.2;
+        p.xz = rotate(p.xz, t);
+        p.xy = rotate(p.xy, t * 1.89);
+        p.xz = abs(p.xz);
+        p.xz -= 0.5;
+    }
+    return dot(sign(p), p) / 5.0;
+}
+
+vec4 rm(vec3 ro, vec3 rd) {
+    float t = 0.0;
+    vec3 col = vec3(0.0);
+    float d = 0.0;
+    for (float i = 0.0; i < 64.0; i++) {
+        vec3 p = ro + rd * t;
+        d = map(p) * 0.5;
+        if (d < 0.02 || d > 100.0) break;
+        col += palette(length(p) * 0.1) / (400.0 * d);
+        t += d;
+    }
+    return vec4(col, 1.0 / (d * 100.0));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = (fragCoord - (iResolution.xy / 2.0)) / iResolution.x;
+    vec3 ro = vec3(0.0, 0.0, -50.0);
+    ro.xz = rotate(ro.xz, iTime);
+    vec3 cf = normalize(-ro);
+    vec3 cs = normalize(cross(cf, vec3(0.0, 1.0, 0.0)));
+    vec3 cu = normalize(cross(cf, cs));
+
+    vec3 uuv = ro + cf * 3.0 + uv.x * cs + uv.y * cu;
+    vec3 rd = normalize(uuv - ro);
+
+    vec4 col = rm(ro, rd);
+    fragColor = col;
+}
+]=]
+
+local PRESET_5_RIPPLE = [=[// Preset 5: Texture Ripple & Fluid Distortion
+// Connect an image/clip to iChannel0, or enjoy the procedural test card fallback!
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = uv * 2.0 - 1.0;
+    p.x *= iResolution.x / iResolution.y;
+
+    // Concentric ripple propagation
+    float dist = length(p);
+    float wave = sin(dist * 18.0 - iTime * 4.5) * 0.025;
+    vec2 warpUV = uv + (p / (dist + 0.0001)) * wave;
+
+    // Sample the input connected to iChannel0
+    vec4 tex = texture(iChannel0, warpUV);
+
+    // Graceful fallback: If iChannel0 is not connected, render animated test pattern
+    if (tex.a < 0.01 || (tex.r == 0.0 && tex.g == 0.0 && tex.b == 0.0))
+    {
+        vec3 col = 0.5 + 0.5 * cos(iTime + warpUV.xyx + vec3(0.0, 2.0, 4.0));
+        float grid = step(0.02, mod(warpUV.x * 10.0, 1.0)) * step(0.02, mod(warpUV.y * 10.0, 1.0));
+        tex = vec4(col * (0.8 + 0.2 * grid), 1.0);
+    }
+
+    fragColor = tex;
+}
+]=]
+
+local PRESET_6_CRT = [=[// Preset 6: Vintage CRT Monitor & Chromatic Aberration
+// Connect video to iChannel0 to turn it into an authentic 80s arcade CRT!
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+    vec2 uv = fragCoord / iResolution.xy;
+
+    // CRT Barrel Curvature
+    vec2 cc = uv - 0.5;
+    float dist = dot(cc, cc);
+    vec2 crtUV = uv + cc * (dist * 0.18);
+
+    // Border vignette mask
+    if (crtUV.x < 0.0 || crtUV.x > 1.0 || crtUV.y < 0.0 || crtUV.y > 1.0)
+    {
+        fragColor = vec4(0.02, 0.02, 0.02, 1.0);
+        return;
+    }
+
+    // Chromatic aberration (RGB shift)
+    float shift = 0.004 * (1.0 + dist * 2.0);
+    vec4 colR = texture(iChannel0, crtUV + vec2(shift, 0.0));
+    vec4 colG = texture(iChannel0, crtUV);
+    vec4 colB = texture(iChannel0, crtUV - vec2(shift, 0.0));
+    vec4 col = vec4(colR.r, colG.g, colB.b, colG.a);
+
+    // Fallback if no input connected: Retro Color Bars
+    if (col.a < 0.01 || (col.r == 0.0 && col.g == 0.0 && col.b == 0.0))
+    {
+        float bar = floor(crtUV.x * 7.0);
+        vec3 barColor = vec3(0.0);
+        if (bar == 0.0) barColor = vec3(0.8, 0.8, 0.8);
+        else if (bar == 1.0) barColor = vec3(0.8, 0.8, 0.0);
+        else if (bar == 2.0) barColor = vec3(0.0, 0.8, 0.8);
+        else if (bar == 3.0) barColor = vec3(0.0, 0.8, 0.0);
+        else if (bar == 4.0) barColor = vec3(0.8, 0.0, 0.8);
+        else if (bar == 5.0) barColor = vec3(0.8, 0.0, 0.0);
+        else barColor = vec3(0.0, 0.0, 0.8);
+        col = vec4(barColor, 1.0);
+    }
+
+    // Scanlines
+    float scanline = sin(crtUV.y * iResolution.y * 1.5) * 0.08;
+    col.rgb -= scanline;
+
+    // Corner vignette
+    float vig = 16.0 * crtUV.x * crtUV.y * (1.0 - crtUV.x) * (1.0 - crtUV.y);
+    col.rgb *= clamp(pow(vig, 0.25), 0.0, 1.0);
+
+    // Subtle flicker
+    col.rgb *= 0.97 + 0.03 * sin(iTime * 120.0);
+
+    fragColor = col;
 }
 ]=]
 
@@ -344,6 +491,31 @@ inline float fwidth(float val) { return 0.001f; }
 inline float2 fwidth(float2 val) { return to_float2(0.001f, 0.001f); }
 inline float3 fwidth(float3 val) { return to_float3(0.001f, 0.001f, 0.001f); }
 inline float4 fwidth(float4 val) { return to_float4(0.001f, 0.001f, 0.001f, 0.001f); }
+
+// --- Shadertoy Channel Abstraction ---
+struct ShadertoyChannel {
+    __TEXTURE2D__ tex;
+    int index;
+    float3 resolution;
+    float time;
+
+    ShadertoyChannel() {}
+    ShadertoyChannel(__TEXTURE2D__ t, int idx, float3 res, float tm)
+        : tex(t), index(idx), resolution(res), time(tm) {}
+};
+
+typedef ShadertoyChannel sampler2D;
+typedef ShadertoyChannel samplerCube;
+
+inline float2 wrapCoords(float2 uv, int mode) {
+    if (mode == 1) { // Repeat / Wrap
+        return uv - floor(uv);
+    } else if (mode == 2) { // Mirrored Repeat
+        float2 m = uv * 0.5f - floor(uv * 0.5f);
+        return abs(m * 2.0f - 1.0f);
+    }
+    return uv; // Clamp (mode 0, handled by sampler)
+}
 ]=]
 
 -- ==============================================================================
@@ -366,7 +538,7 @@ local function PreprocessUserGLSL(glslCode)
     code = code:gsub("%f[%w]lowp%f[%W]", "")
 
     -- Comment out user-declared uniform lines that would collide with struct members
-    code = code:gsub("uniform%s+[^;]+;", "// %0")
+    code = code:gsub("uniform%s+.-;", "// %0")
 
     -- Normalize 'out vec4 <name>' to 'thread vec4& <name>' (explicit thread address space required by Apple Metal)
     code = code:gsub("out%s+vec4%s+([%a_][%w_]*)", "thread vec4& %1")
@@ -425,36 +597,73 @@ local function BuildFullKernelSource(userGLSL, kernelName)
 // --- Unified Shadertoy Scope Wrapper ---
 struct ShadertoyContext {
     __CONSTANTREF__ ShadertoyParams *params;
-    __TEXTURE2D__ iChannel0;
-    __TEXTURE2D__ iChannel1;
-    __TEXTURE2D__ iChannel2;
-    __TEXTURE2D__ iChannel3;
+    ShadertoyChannel iChannel0;
+    ShadertoyChannel iChannel1;
+    ShadertoyChannel iChannel2;
+    ShadertoyChannel iChannel3;
     float3 iResolution;
     float iTime;
     float iTimeDelta;
     int iFrame;
     float4 iMouse;
+    vec3 iChannelResolution[4];
+    float iChannelTime[4];
     vec4 gl_FragColor;
     vec2 gl_FragCoord;
 
     // Helpers for texture sampling
-    inline float4 texture(__TEXTURE2D__ ch, vec2 uv) {
-        return _tex2DVecN(ch, uv.x, uv.y, params->compOrder);
+    inline float4 texture(ShadertoyChannel ch, vec2 uv) {
+        vec2 wuv = wrapCoords(uv, params->channelWrap[ch.index]);
+        return _tex2DVecN(ch.tex, wuv.x, wuv.y, params->compOrder);
     }
-    inline float4 texture(__TEXTURE2D__ ch, vec2 uv, float bias) {
-        return _tex2DVecN(ch, uv.x, uv.y, params->compOrder);
+    inline float4 texture(ShadertoyChannel ch, vec2 uv, float bias) {
+        vec2 wuv = wrapCoords(uv, params->channelWrap[ch.index]);
+        return _tex2DVecN(ch.tex, wuv.x, wuv.y, params->compOrder);
     }
-    inline float4 texture(int ch, vec2 uv) {
-        return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
+    inline float4 textureLod(ShadertoyChannel ch, vec2 uv, float lod) {
+        vec2 wuv = wrapCoords(uv, params->channelWrap[ch.index]);
+        return _tex2DVecN(ch.tex, wuv.x, wuv.y, params->compOrder);
+    }
+    inline float4 textureGrad(ShadertoyChannel ch, vec2 uv, vec2 dPdx, vec2 dPdy) {
+        vec2 wuv = wrapCoords(uv, params->channelWrap[ch.index]);
+        return _tex2DVecN(ch.tex, wuv.x, wuv.y, params->compOrder);
+    }
+    inline float4 texelFetch(ShadertoyChannel ch, int2 p, int lod = 0) {
+        float u = ((float)p.x + 0.5f) / max(ch.resolution.x, 1.0f);
+        float v = ((float)p.y + 0.5f) / max(ch.resolution.y, 1.0f);
+        return _tex2DVecN(ch.tex, u, v, params->compOrder);
+    }
+    inline float4 texelFetch(ShadertoyChannel ch, float2 p, int lod = 0) {
+        return texelFetch(ch, to_int2((int)p.x, (int)p.y), lod);
+    }
+    inline int2 textureSize(ShadertoyChannel ch, int lod = 0) {
+        return to_int2((int)ch.resolution.x, (int)ch.resolution.y);
+    }
+    inline float4 texture2D(ShadertoyChannel ch, vec2 uv) {
+        return texture(ch, uv);
+    }
+    inline float4 texture2D(ShadertoyChannel ch, vec2 uv, float bias) {
+        return texture(ch, uv, bias);
+    }
+    inline float4 texture2DLod(ShadertoyChannel ch, vec2 uv, float lod) {
+        return textureLod(ch, uv, lod);
+    }
+    inline float4 textureCube(ShadertoyChannel ch, vec3 dir) {
+        float u = atan(dir.z, dir.x) / (2.0f * 3.1415926535f) + 0.5f;
+        float v = asin(clamp(dir.y, -1.0f, 1.0f)) / 3.1415926535f + 0.5f;
+        return texture(ch, to_float2(u, v));
+    }
+    inline float4 texture(ShadertoyChannel ch, vec3 dir) {
+        return textureCube(ch, dir);
+    }
+    inline float4 texture(int ch_idx, vec2 uv) {
+        if (ch_idx == 1) return texture(iChannel1, uv);
+        if (ch_idx == 2) return texture(iChannel2, uv);
+        if (ch_idx == 3) return texture(iChannel3, uv);
+        return texture(iChannel0, uv);
     }
     inline float4 texture(vec2 uv) {
-        return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
-    }
-    inline float4 textureLod(__TEXTURE2D__ ch, vec2 uv, float lod) {
-        return _tex2DVecN(ch, uv.x, uv.y, params->compOrder);
-    }
-    inline float4 textureLod(int ch, vec2 uv, float lod) {
-        return _tex2DVecN(iChannel0, uv.x, uv.y, params->compOrder);
+        return texture(iChannel0, uv);
     }
 
     // Insert user shader code here
@@ -463,22 +672,39 @@ struct ShadertoyContext {
 };
 
 // --- DVIP Native Kernel Entry Point ---
-__KERNEL__ void ]] .. kName .. [[(__CONSTANTREF__ ShadertoyParams *params, __TEXTURE2D__ iChannel0, __TEXTURE2D_WRITE__ dst)
+__KERNEL__ void ]] .. kName .. [[(
+    __CONSTANTREF__ ShadertoyParams *params,
+    __TEXTURE2D__ iChannel0,
+    __TEXTURE2D__ iChannel1,
+    __TEXTURE2D__ iChannel2,
+    __TEXTURE2D__ iChannel3,
+    __TEXTURE2D_WRITE__ dst
+)
 {
     DEFINE_KERNEL_ITERATORS_XY(x, y);
     if (x < params->width && y < params->height)
     {
         ShadertoyContext ctx;
         ctx.params = params;
-        ctx.iChannel0 = iChannel0;
-        ctx.iChannel1 = iChannel0;
-        ctx.iChannel2 = iChannel0;
-        ctx.iChannel3 = iChannel0;
         ctx.iResolution = to_float3(params->iResolution[0], params->iResolution[1], params->iResolution[2]);
         ctx.iTime = params->iTime;
         ctx.iTimeDelta = params->iTimeDelta;
         ctx.iFrame = params->iFrame;
         ctx.iMouse = to_float4(params->iMouse[0], params->iMouse[1], params->iMouse[2], params->iMouse[3]);
+
+        for (int c = 0; c < 4; ++c) {
+            ctx.iChannelResolution[c] = to_float3(
+                params->iChannelResolution[c * 3 + 0],
+                params->iChannelResolution[c * 3 + 1],
+                params->iChannelResolution[c * 3 + 2]
+            );
+            ctx.iChannelTime[c] = params->iChannelTime[c];
+        }
+
+        ctx.iChannel0 = ShadertoyChannel(iChannel0, 0, ctx.iChannelResolution[0], ctx.iChannelTime[0]);
+        ctx.iChannel1 = ShadertoyChannel(iChannel1, 1, ctx.iChannelResolution[1], ctx.iChannelTime[1]);
+        ctx.iChannel2 = ShadertoyChannel(iChannel2, 2, ctx.iChannelResolution[2], ctx.iChannelTime[2]);
+        ctx.iChannel3 = ShadertoyChannel(iChannel3, 3, ctx.iChannelResolution[3], ctx.iChannelTime[3]);
 
         vec2 fragCoord = to_float2((float)x + 0.5f, (float)y + 0.5f);
         vec4 fragColor = to_float4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -510,6 +736,9 @@ function Create()
             { CCS_AddString = "Preset 1: Plasma & Waves (2D)", },
             { CCS_AddString = "Preset 2: 3D Raymarching SDF", },
             { CCS_AddString = "Preset 3: Cyberpunk Neon Grid", },
+            { CCS_AddString = "Preset 4: Fractal Pyramid (3D)", },
+            { CCS_AddString = "Preset 5: Texture Ripple & Warp (iChannel0)", },
+            { CCS_AddString = "Preset 6: CRT Scanlines & Glitch (iChannel0)", },
         })
 
         InResetBtn = self:AddInput("Reset Code to Preset", "ResetCode", {
@@ -569,12 +798,104 @@ function Create()
 
     self:EndControlNest()
 
-    -- Optional texture input for iChannel0
+    self:BeginControlNest("Channel Inputs & Textures", "ChannelNest", false)
+
+        InOutputSize = self:AddInput("Output Resolution", "OutputResolution", {
+            LINKID_DataType     = "Number",
+            INPID_InputControl  = "ComboControl",
+            INP_Default         = 0.0,
+            INP_Integer         = true,
+            INP_DoNotifyChanged = true,
+            { CCS_AddString = "Auto (Fit iChannel0 if connected, else Timeline)", },
+            { CCS_AddString = "Match Timeline Resolution", },
+            { CCS_AddString = "Custom Resolution", },
+        })
+
+        InCustomWidth = self:AddInput("Custom Width", "CustomWidth", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "SliderControl",
+            INP_Default        = 1920,
+            INP_Integer        = true,
+            INP_MinScale       = 256,
+            INP_MaxScale       = 7680,
+            IC_Visible         = false,
+        })
+
+        InCustomHeight = self:AddInput("Custom Height", "CustomHeight", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "SliderControl",
+            INP_Default        = 1080,
+            INP_Integer        = true,
+            INP_MinScale       = 256,
+            INP_MaxScale       = 4320,
+            IC_Visible         = false,
+        })
+
+        InWrap0 = self:AddInput("iChannel0 Wrap", "Wrap0", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "ComboControl",
+            INP_Default        = 1.0, -- Repeat by default
+            INP_Integer        = true,
+            { CCS_AddString = "Clamp to Edge", },
+            { CCS_AddString = "Repeat / Wrap", },
+            { CCS_AddString = "Mirrored Repeat", },
+        })
+
+        InWrap1 = self:AddInput("iChannel1 Wrap", "Wrap1", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "ComboControl",
+            INP_Default        = 1.0,
+            INP_Integer        = true,
+            { CCS_AddString = "Clamp to Edge", },
+            { CCS_AddString = "Repeat / Wrap", },
+            { CCS_AddString = "Mirrored Repeat", },
+        })
+
+        InWrap2 = self:AddInput("iChannel2 Wrap", "Wrap2", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "ComboControl",
+            INP_Default        = 1.0,
+            INP_Integer        = true,
+            { CCS_AddString = "Clamp to Edge", },
+            { CCS_AddString = "Repeat / Wrap", },
+            { CCS_AddString = "Mirrored Repeat", },
+        })
+
+        InWrap3 = self:AddInput("iChannel3 Wrap", "Wrap3", {
+            LINKID_DataType    = "Number",
+            INPID_InputControl = "ComboControl",
+            INP_Default        = 1.0,
+            INP_Integer        = true,
+            { CCS_AddString = "Clamp to Edge", },
+            { CCS_AddString = "Repeat / Wrap", },
+            { CCS_AddString = "Mirrored Repeat", },
+        })
+
+    self:EndControlNest()
+
+    -- 4 Native Image Inputs for Shadertoy Channels
     InChannel0 = self:AddInput("iChannel0", "iChannel0", {
         LINKID_DataType = "Image",
         LINK_Main       = 1,
         INP_Required    = false,
-        INP_SendRequest = false,
+    })
+
+    InChannel1 = self:AddInput("iChannel1", "iChannel1", {
+        LINKID_DataType = "Image",
+        LINK_Main       = 2,
+        INP_Required    = false,
+    })
+
+    InChannel2 = self:AddInput("iChannel2", "iChannel2", {
+        LINKID_DataType = "Image",
+        LINK_Main       = 3,
+        INP_Required    = false,
+    })
+
+    InChannel3 = self:AddInput("iChannel3", "iChannel3", {
+        LINKID_DataType = "Image",
+        LINK_Main       = 4,
+        INP_Required    = false,
     })
 
     OutImage = self:AddOutput("Output", "Output", {
@@ -597,6 +918,13 @@ end
 function NotifyChanged(inp, param, time)
     if InCode == nil then return end
     local t = time or 0
+
+    if inp == InOutputSize and param ~= nil then
+        local isCustom = (math.floor(param.Value) == 2)
+        if InCustomWidth then InCustomWidth:SetAttrs({ IC_Visible = isCustom }) end
+        if InCustomHeight then InCustomHeight:SetAttrs({ IC_Visible = isCustom }) end
+    end
+
     if inp == InPreset and param ~= nil then
         local presetIdx = math.floor(param.Value)
         DebugLog("NotifyChanged: Preset switched to " .. tostring(presetIdx))
@@ -606,6 +934,12 @@ function NotifyChanged(inp, param, time)
             InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), t)
         elseif presetIdx == 3 then
             InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), t)
+        elseif presetIdx == 4 then
+            InCode:SetSource(MakeText(PRESET_4_FRACTAL), t)
+        elseif presetIdx == 5 then
+            InCode:SetSource(MakeText(PRESET_5_RIPPLE), t)
+        elseif presetIdx == 6 then
+            InCode:SetSource(MakeText(PRESET_6_CRT), t)
         end
     elseif inp == InResetBtn and param ~= nil and param.Value == 1 then
         local presetIdx = 1
@@ -622,6 +956,12 @@ function NotifyChanged(inp, param, time)
             InCode:SetSource(MakeText(PRESET_2_RAYMARCHING), t)
         elseif presetIdx == 3 then
             InCode:SetSource(MakeText(PRESET_3_CYBERPUNK), t)
+        elseif presetIdx == 4 then
+            InCode:SetSource(MakeText(PRESET_4_FRACTAL), t)
+        elseif presetIdx == 5 then
+            InCode:SetSource(MakeText(PRESET_5_RIPPLE), t)
+        elseif presetIdx == 6 then
+            InCode:SetSource(MakeText(PRESET_6_CRT), t)
         end
     end
 end
@@ -638,16 +978,59 @@ function Process(req)
     Height = Height / Scale
     Scale = 1
 
+    -- If Width / Height inputs are not available or 0, fallback to timeline resolution
+    if realwidth == nil or realwidth == 0 then
+        realwidth = self.Comp:GetPrefs("Comp.FrameFormat.Width") or 1920
+    end
+    if realheight == nil or realheight == 0 then
+        realheight = self.Comp:GetPrefs("Comp.FrameFormat.Height") or 1080
+    end
+
+    -- 1. Fetch connected channel inputs safely
+    local inImg0 = InChannel0 and InChannel0:GetValue(req) or nil
+    local inImg1 = InChannel1 and InChannel1:GetValue(req) or nil
+    local inImg2 = InChannel2 and InChannel2:GetValue(req) or nil
+    local inImg3 = InChannel3 and InChannel3:GetValue(req) or nil
+
+    -- 2. Determine target output resolution
+    local outSizeChoice = 0
+    if InOutputSize then
+        local sz = InOutputSize:GetValue(req)
+        if sz then outSizeChoice = math.floor(sz.Value) end
+    end
+
+    local renderWidth = realwidth
+    local renderHeight = realheight
+
+    if outSizeChoice == 0 then -- Auto: iChannel0 if connected, else Timeline
+        if inImg0 ~= nil then
+            renderWidth = inImg0.Width or (inImg0.DataWindow and inImg0.DataWindow:Width()) or realwidth
+            renderHeight = inImg0.Height or (inImg0.DataWindow and inImg0.DataWindow:Height()) or realheight
+        else
+            renderWidth = realwidth
+            renderHeight = realheight
+        end
+    elseif outSizeChoice == 1 then -- Match Timeline
+        renderWidth = self.Comp:GetPrefs("Comp.FrameFormat.Width") or 1920
+        renderHeight = self.Comp:GetPrefs("Comp.FrameFormat.Height") or 1080
+    elseif outSizeChoice == 2 then -- Custom
+        if InCustomWidth and InCustomHeight then
+            renderWidth = math.floor(InCustomWidth:GetValue(req).Value)
+            renderHeight = math.floor(InCustomHeight:GetValue(req).Value)
+        end
+    end
+
     local imgattrs = {
         IMG_Document          = self.Comp,
-        IMG_Width             = Width,
-        IMG_Height            = Height,
-        IMG_XScale            = XAspect,
-        IMG_YScale            = YAspect,
-        IMAT_OriginalWidth    = realwidth,
-        IMAT_OriginalHeight   = realheight,
+        IMG_Width             = renderWidth,
+        IMG_Height            = renderHeight,
+        IMG_XScale            = XAspect or 1.0,
+        IMG_YScale            = YAspect or 1.0,
+        IMAT_OriginalWidth    = renderWidth,
+        IMAT_OriginalHeight   = renderHeight,
         IMG_Quality           = not req:IsQuick(),
         IMG_MotionBlurQuality = not req:IsNoMotionBlur(),
+        IMG_DeferAlloc        = true,
     }
 
     if not req:IsStampOnly() then
@@ -660,24 +1043,44 @@ function Process(req)
         imgattrs.IMG_Depth = 8 -- Default to 32-bit float for high dynamic range shader accuracy
     end
 
-    -- Handle optional iChannel0 input safely
-    local inImg = nil
-    if InChannel0 then
-        inImg = InChannel0:GetValue(req)
+    -- 3. Prepare channels and transparent dummy fallback for unconnected inputs
+    local dummyImg = nil
+    local function GetDummyImage()
+        if not dummyImg then
+            local dummyAttrs = {
+                IMG_Document = self.Comp,
+                IMG_Width    = renderWidth,
+                IMG_Height   = renderHeight,
+                IMG_Depth    = 8,
+            }
+            dummyImg = Image(dummyAttrs)
+            dummyImg:Fill(Pixel({R = 0, G = 0, B = 0, A = 0}))
+        end
+        return dummyImg
     end
-    local channel0Img
-    local hasChannel0 = false
 
-    if inImg ~= nil then
-        channel0Img = inImg
-        hasChannel0 = true
-    else
-        channel0Img = Image(imgattrs)
-        channel0Img:Fill(Pixel({R = 0, G = 0, B = 0, A = 1}))
+    local rawInputs = { inImg0, inImg1, inImg2, inImg3 }
+    local channelImgs = {}
+    local channelRes = {}
+
+    for i = 1, 4 do
+        local img = rawInputs[i]
+        if img ~= nil then
+            channelImgs[i] = img
+            local w = img.Width or (img.DataWindow and img.DataWindow:Width()) or renderWidth
+            local h = img.Height or (img.DataWindow and img.DataWindow:Height()) or renderHeight
+            local xasp = img.XScale or 1.0
+            local yasp = img.YScale or 1.0
+            local aspect = (yasp > 0) and (xasp / yasp) or 1.0
+            channelRes[i] = { w, h, aspect }
+        else
+            channelImgs[i] = GetDummyImage()
+            channelRes[i] = { renderWidth, renderHeight, (YAspect > 0) and (XAspect / YAspect) or 1.0 }
+        end
     end
 
     -- Allocate output image
-    local dst = Image({IMG_Like = channel0Img, IMG_DeferAlloc = true})
+    local dst = Image(imgattrs)
 
     if req:IsPreCalc() then
         local out = Image({IMG_Like = dst, IMG_NoData = true})
@@ -687,14 +1090,14 @@ function Process(req)
         return
     end
 
-    -- 1. Explicitly read InPreset so Fusion registers InPreset in the tool's dependency graph
+    -- 4. Explicitly read InPreset so Fusion registers InPreset in the tool's dependency graph
     local presetVal = 0
     if InPreset then
         local p = InPreset:GetValue(req)
         if p then presetVal = math.floor(p.Value) end
     end
 
-    -- 2. Fetch user controls safely
+    -- 5. Fetch user controls safely
     local code = ""
     if InCode and InCode:GetValue(req) ~= nil then
         code = InCode:GetValue(req).Value or ""
@@ -704,6 +1107,12 @@ function Process(req)
             code = PRESET_2_RAYMARCHING
         elseif presetVal == 3 then
             code = PRESET_3_CYBERPUNK
+        elseif presetVal == 4 then
+            code = PRESET_4_FRACTAL
+        elseif presetVal == 5 then
+            code = PRESET_5_RIPPLE
+        elseif presetVal == 6 then
+            code = PRESET_6_CRT
         else
             code = PRESET_1_PLASMA
         end
@@ -729,7 +1138,8 @@ function Process(req)
     local kernelName = "ShadertoyKernel_" .. kernelHash
     local kernelSource = BuildFullKernelSource(code, kernelName)
 
-    DebugLog(string.format("Process: Time=%s, presetVal=%d, codeLen=%d, kernel=%s", tostring(curTime), presetVal, #code, kernelName))
+    DebugLog(string.format("Process: Time=%s, presetVal=%d, codeLen=%d, kernel=%s, in0=%s, in1=%s",
+        tostring(curTime), presetVal, #code, kernelName, tostring(inImg0 ~= nil), tostring(inImg1 ~= nil)))
 
     -- Create DVIP Compute Node (compiles via Metal on macOS)
     local node = DVIPComputeNode(req, kernelName, kernelSource, "ShadertoyParams", ShadertoyParams)
@@ -738,20 +1148,38 @@ function Process(req)
     if node then
         local params = node:GetParamBlock(ShadertoyParams)
 
-        params.iResolution[0] = realwidth
-        params.iResolution[1] = realheight
+        params.iResolution[0] = renderWidth
+        params.iResolution[1] = renderHeight
         params.iResolution[2] = (YAspect > 0) and (XAspect / YAspect) or 1.0
 
         params.iTime = timeInSeconds
         params.iTimeDelta = timeDeltaInSeconds
         params.iFrame = currentFrame
 
-        params.iMouse[0] = mouse.X * realwidth
-        params.iMouse[1] = mouse.Y * realheight
-        params.iMouse[2] = (mouseDown > 0.5) and (mouse.X * realwidth) or -1.0
-        params.iMouse[3] = (mouseDown > 0.5) and (mouse.Y * realheight) or -1.0
+        params.iMouse[0] = mouse.X * renderWidth
+        params.iMouse[1] = mouse.Y * renderHeight
+        params.iMouse[2] = (mouseDown > 0.5) and (mouse.X * renderWidth) or -1.0
+        params.iMouse[3] = (mouseDown > 0.5) and (mouse.Y * renderHeight) or -1.0
 
-        params.hasChannel0 = hasChannel0 and 1 or 0
+        params.hasChannel0 = (inImg0 ~= nil) and 1 or 0
+        params.hasChannel1 = (inImg1 ~= nil) and 1 or 0
+        params.hasChannel2 = (inImg2 ~= nil) and 1 or 0
+        params.hasChannel3 = (inImg3 ~= nil) and 1 or 0
+
+        local wrap0 = InWrap0 and math.floor(InWrap0:GetValue(req).Value) or 1
+        local wrap1 = InWrap1 and math.floor(InWrap1:GetValue(req).Value) or 1
+        local wrap2 = InWrap2 and math.floor(InWrap2:GetValue(req).Value) or 1
+        local wrap3 = InWrap3 and math.floor(InWrap3:GetValue(req).Value) or 1
+        local wrapModes = { wrap0, wrap1, wrap2, wrap3 }
+
+        for i = 1, 4 do
+            params.iChannelResolution[(i - 1) * 3 + 0] = channelRes[i][1]
+            params.iChannelResolution[(i - 1) * 3 + 1] = channelRes[i][2]
+            params.iChannelResolution[(i - 1) * 3 + 2] = channelRes[i][3]
+            params.iChannelTime[i - 1] = timeInSeconds
+            params.channelWrap[i - 1] = wrapModes[i]
+        end
+
         params.width = dst.DataWindow:Width()
         params.height = dst.DataWindow:Height()
         params.compOrder = 15
@@ -759,7 +1187,10 @@ function Process(req)
         node:SetParamBlock(params)
 
         node:AddSampler("RowSampler", TEX_FILTER_MODE_LINEAR, TEX_ADDRESS_MODE_CLAMP, TEX_NORMALIZED_COORDS_TRUE)
-        node:AddInput("iChannel0", channel0Img)
+        node:AddInput("iChannel0", channelImgs[1])
+        node:AddInput("iChannel1", channelImgs[2])
+        node:AddInput("iChannel2", channelImgs[3])
+        node:AddInput("iChannel3", channelImgs[4])
         node:AddOutput("dst", dst)
 
         success = node:RunSession(req)

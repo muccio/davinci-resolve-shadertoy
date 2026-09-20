@@ -137,35 +137,72 @@ All'interno della cartella `examples/` (e selezionabili dal menu Preset dell'Ins
 ### 3. `examples/03_cyberpunk_neon_grid.glsl` (Orizzonte Synthwave Anni '80)
 - Tipica estetica retrò synthwave con sole sfumato a bande orizzontali, griglia prospettica a pavimento che scorre verso l'infinito e nebbia volumetrica all'orizzonte.
 
+### 4. `examples/04_fractal_pyramid.glsl` (Piramide Frattale 3D Raymarching)
+- Shader raymarching ricorsivo con rotazioni angolari dinamiche, estrazione distanze e palette cromatica procedurale.
+- Valida la moltiplicazione tra vettori e matrici (`vec * mat`), la trasformazione di swizzle compound (`p.xz -= 0.5`) e la normalizzazione dei float.
+
+### 5. `examples/05_texture_ripple_warp.glsl` (Deformazione Ondulatoria su iChannel0)
+- Esempio di utilizzo dei canali di input: deforma e ondula in tempo reale qualsiasi immagine o video collegato a `iChannel0`.
+- Include un pattern di test geometrico procedurale di fallback se nessun input è collegato.
+
+### 6. `examples/06_crt_scanlines_glitch.glsl` (Monitor CRT Vintage & Aberrazione Cromatica)
+- Trasforma il segnale video in ingresso su `iChannel0` in un display arcade vintage anni '80: curvatura dello schermo a barilotto, aberrazione cromatica sui bordi (separazione RGB), scanline orizzontali, vignettatura e flicker analogico.
+- Include generatore di barre colore SMPTE di fallback se l'ingresso è vuoto.
+
 ---
 
 ## 6. Guida all'Adattamento del Codice da Shadertoy
 
-La maggior parte degli shader standard di Shadertoy può essere incollata **senza alcuna modifica**. Tuttavia, ecco la checklist per gli shader con caratteristiche avanzate:
+La maggior parte degli shader standard di Shadertoy può essere incollata **senza alcuna modifica**. Il plugin implementa un'emulazione completa dell'ambiente Shadertoy:
 
-### 1. Lettere Floating Point
-In GLSL è comune scrivere numeri decimali abbreviati come `1.` o `.5`. Il preprocessore automatico del Fuse converte gran parte di questi in `1.0f` o `0.5f`. Se noti un errore su un numero decimale in una funzione complessa, assicurati di scrivere esplicitamente la parte intera e decimale (es. `0.5` invece di `.5`).
+### 1. Canali di Input Immagine / Video (`iChannel0`, `iChannel1`, `iChannel2`, `iChannel3`)
+Il nodo `Shadertoy` dispone di **4 porte di ingresso immagine native** in Fusion:
+- **`iChannel0`**: Ingresso principale (freccia arancione/oro sul nodo).
+- **`iChannel1`**: Ingresso secondario (freccia verde sul nodo).
+- **`iChannel2`** e **`iChannel3`**: Ingressi ausiliari.
 
-### 2. Uso di Texture / `iChannel0`
-Se uno shader usa una texture (ad esempio `texture(iChannel0, uv)`):
-1. Nella pagina Fusion, collega una clip video, una foto o un nodo *MediaIn* / *Loader* all'ingresso **`iChannel0 (Texture Input)`** del nodo `Shadertoy`.
-2. All'interno dello shader, usa:
-   ```glsl
-   vec4 texCol = texture(iChannel0, uv);
-   ```
-   Il Fuse campionerà automaticamente l'immagine collegata con filtraggio bilineare.
+**Come collegarli nel Flow di Fusion:**
+- Trascina il filo da qualsiasi nodo (`MediaIn`, `Loader`, `Background`, `FastNoise`, o un altro `Shadertoy`) sul quadratino di ingresso del nodo `Shadertoy`.
+- In alternativa, fai **click con il tasto destro** sul nodo `Shadertoy` o tieni premuto `Alt / Option` trascinando la connessione per selezionare a quale canale (`iChannel0`..`3`) collegare l'immagine!
 
-### 3. Shader Multipass (Buffer A, Buffer B, Buffer C, Buffer D)
-Shadertoy usa i Buffer per effetti con persistenza temporale (simulazione fluidi, motion blur, sfocature gaussiane progressive, riverbero luce).
-In DaVinci Resolve, puoi replicare questa architettura in modo modulare ed elegante:
-1. Crea un primo nodo `Shadertoy` per la logica di **Buffer A**.
-2. Crea un secondo nodo `Shadertoy` per la visualizzazione finale (**Image**).
-3. Collega l'uscita del nodo `Shadertoy` (Buffer A) all'ingresso `iChannel0` del secondo nodo `Shadertoy` (Image).
-4. Se è necessario un loop di feedback (il fotogramma precedente re-immesso nel buffer):
-   - In Fusion, usa un nodo nativo **Feedback** oppure il nodo **TimeSpeed** per ritardare il frame di 1 e re-inviarlo all'ingresso di `iChannel0`.
+### 2. Funzioni di Campionamento Texture Supportate
+Nel tuo codice shader puoi usare tutte le consuete funzioni GLSL di Shadertoy:
+- `texture(iChannelN, uv)`: Campiona il canale alle coordinate normalizzate `[0.0, 1.0]`.
+- `texture(iChannelN, uv, bias)`: Campiona con livello di dettaglio / bias.
+- `textureLod(iChannelN, uv, lod)`: Campiona specificando il livello MIP / LOD.
+- `textureGrad(iChannelN, uv, dPdx, dPdy)`: Campiona con gradienti espliciti.
+- `texelFetch(iChannelN, ivec2(px, py), lod)`: Campionamento a coordinate intere di pixel. Il plugin normalizza automaticamente le coordinate rispetto a `iChannelResolution`.
+- `textureSize(iChannelN, lod)`: Restituisce un `ivec2` con larghezza e altezza del canale in pixel.
+- `texture2D(...)` / `texture2DLod(...)`: Piena compatibilità all'indietro per shader WebGL 1.0 legacy.
+- `textureCube(iChannelN, dir)` / `texture(iChannelN, dir)`: Proiezione sferica automatica su texture 2D / equirettangolari.
 
-### 4. Gestione di Variabili Globali Fuori da `mainImage()`
-Il Fuse incapsula automaticamente il codice utente all'interno di una struttura di contesto unificata (`struct ShadertoyContext`). Ciò significa che **qualsiasi funzione ausiliaria** (come `float map(vec3 p)`) può leggere direttamente `iTime`, `iResolution` e `iMouse` senza che tu debba passare questi parametri manualmente come argomenti!
+### 3. Variabili Globali Uniform dei Canali
+- **`iChannelResolution[4]`**: Array di `vec3` contenente `{ larghezza, altezza, aspect ratio }` per ciascuno dei 4 canali. Se un canale non è collegato, utilizza la risoluzione del progetto per prevenire divisioni per zero.
+- **`iChannelTime[4]`**: Tempo di riproduzione in secondi associato alla traccia video di ciascun canale.
+- **`hasChannel0`..`hasChannel3`**: Flag booleani (1 o 0) disponibili internamente.
+
+### 4. Impostazioni Avanzate di Risoluzione e Wrap (Inspector)
+Nel gruppo **Channel Inputs & Textures** dell'Inspector puoi configurare:
+- **Output Resolution**:
+  - `Auto`: adatta la risoluzione di output all'immagine collegata su `iChannel0` (se presente), altrimenti usa la risoluzione della Timeline/Progetto.
+  - `Match Timeline Resolution`: forza sempre la risoluzione della Timeline di DaVinci Resolve.
+  - `Custom Resolution`: permette di impostare larghezza e altezza personalizzate (da 256x256 fino a 8K).
+- **Wrap Mode per canale (0..3)**:
+  - `Clamp to Edge`: i pixel ai bordi vengono estesi.
+  - `Repeat / Wrap` (Predefinito): la texture si ripete all'infinito (`uv - floor(uv)`), ideale per pattern, rumore e texture piastrellabili.
+  - `Mirrored Repeat`: la texture si ripete a specchio ad ogni bordo.
+
+### 5. Shader Multipass (Buffer A, Buffer B, Buffer C, Buffer D)
+Shadertoy usa i Buffer per simulazioni con persistenza temporale (fluidodinamica, sfocature progressive, riverbero luce).
+In DaVinci Resolve, puoi replicare questa architettura collegando i nodi `Shadertoy` in cascata:
+1. Crea un primo nodo `Shadertoy` con il codice del **Buffer A**.
+2. Crea un secondo nodo `Shadertoy` con il codice del rendering finale (**Image**).
+3. Collega l'uscita del primo nodo all'ingresso `iChannel0` del secondo nodo.
+4. Per creare un anello di feedback (il fotogramma precedente re-immesso nel buffer):
+   - Inserisci un nodo Fusion **Feedback** o **TimeSpeed** tra l'uscita e l'ingresso di `iChannel1` o `iChannel0`.
+
+### 6. Contesto Unificato per Funzioni Fuori da `mainImage()`
+Il Fuse incapsula automaticamente il codice utente all'interno di `struct ShadertoyContext`. Qualsiasi funzione ausiliaria (come `float map(vec3 p)`) può leggere direttamente `iTime`, `iResolution`, `iMouse`, `iChannelResolution` e campionare `texture(iChannel0, uv)` senza dover passare questi parametri manualmente come argomenti!
 
 ---
 
