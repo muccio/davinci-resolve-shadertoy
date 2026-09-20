@@ -2,6 +2,10 @@
 	Tools = ordered() {
 		Shadertoy = MacroOperator {
 			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "MediaIn1",
+					Source = "Output",
+				},
 				Input1 = InstanceInput {
 					SourceOp = "Shadertoy1",
 					Source = "Preset",
@@ -88,26 +92,6 @@
 					Name = "iChannel3 Wrap",
 					Default = 1,
 				},
-				Input16 = InstanceInput {
-					SourceOp = "Shadertoy1",
-					Source = "iChannel0",
-					Name = "iChannel0",
-				},
-				Input17 = InstanceInput {
-					SourceOp = "Shadertoy1",
-					Source = "iChannel1",
-					Name = "iChannel1",
-				},
-				Input18 = InstanceInput {
-					SourceOp = "Shadertoy1",
-					Source = "iChannel2",
-					Name = "iChannel2",
-				},
-				Input19 = InstanceInput {
-					SourceOp = "Shadertoy1",
-					Source = "iChannel3",
-					Name = "iChannel3",
-				},
 			},
 			Outputs = {
 				MainOutput1 = InstanceOutput {
@@ -117,8 +101,20 @@
 			},
 			ViewInfo = GroupInfo { Pos = { 0, 0 } },
 			Tools = ordered() {
+				MediaIn1 = MediaIn {
+					Inputs = {
+						SourceOp = "MediaIn1",
+					},
+					ViewInfo = OperatorInfo { Pos = { -200, 0 } },
+				},
 				Shadertoy1 = Fuse.ShadertoyFuse {
-					ViewInfo = OperatorInfo { Pos = { -100, 0 } },
+					Inputs = {
+						iChannel0 = Input {
+							SourceOp = "MediaIn1",
+							Source = "Output",
+						},
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
 				},
 				MediaOut1 = MediaOut {
 					Inputs = {
@@ -128,7 +124,7 @@
 							Source = "Output",
 						},
 					},
-					ViewInfo = OperatorInfo { Pos = { 100, 0 } },
+					ViewInfo = OperatorInfo { Pos = { 200, 0 } },
 				}
 			},
 		}
