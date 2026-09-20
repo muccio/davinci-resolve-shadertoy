@@ -694,6 +694,8 @@ local function DebugLog(msg)
     end
 end
 
+local LastStatusByTool = {}
+
 -- Inspects DaVinci Resolve engine log to extract detailed compiler errors
 local function GetLatestCompilerError(kernelName, prefixLines)
     local home = os.getenv("HOME") or ""
@@ -1218,7 +1220,6 @@ function Process(req)
         IMAT_OriginalHeight   = renderHeight,
         IMG_Quality           = not req:IsQuick(),
         IMG_MotionBlurQuality = not req:IsNoMotionBlur(),
-        IMG_DeferAlloc        = true,
     }
 
     if not req:IsStampOnly() then
@@ -1406,17 +1407,18 @@ function Process(req)
     end
 
     -- Update compiler status console in Inspector if message changed
-    if self.LastStatusText ~= statusMsg then
-        self.LastStatusText = statusMsg
-        if InCompilerStatus then
-            pcall(function()
+    pcall(function()
+        local toolId = tostring(self)
+        if LastStatusByTool[toolId] ~= statusMsg then
+            LastStatusByTool[toolId] = statusMsg
+            if InCompilerStatus then
                 InCompilerStatus:SetSource(MakeText(statusMsg), req.Time or 0)
-            end)
+            end
         end
-    end
+    end)
 
     -- Robust visual error fallback (magenta diagnostic) to avoid crashing DaVinci Resolve
-    if not success then
+    if not success or not dst then
         dst = Image(imgattrs)
         -- Diagnostic magenta color
         dst:Fill(Pixel({R = 0.85, G = 0.05, B = 0.65, A = 1.0}))
