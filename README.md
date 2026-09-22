@@ -100,25 +100,34 @@ Se preferisci copiare i file manualmente tramite Finder o Terminale:
    [ Shadertoy1 ] ---> [ MediaOut1 ]
    ```
 5. Clicca sul nodo `Shadertoy1` per aprire l'**Inspector** a destra:
-   - **Preset**: Seleziona tra i 3 preset integrati (Plasma, 3D Raymarching, Cyberpunk).
+   - **Preset**: Seleziona tra i 7 preset integrati (Plasma, 3D Raymarching, Cyberpunk, Frattale 3D, Ripple Warp, CRT Glitch, VHS Glitch).
    - **Time Speed (iTime)**: Modifica la velocità di riproduzione (1.0 = normale, 0.5 = rallentatore, valori negativi = riproduzione all'indietro).
    - **Time Offset**: Sposta l'animazione temporale avanti o indietro di N secondi.
    - **Mouse Pos (iMouse.xy)**: Clicca e trascina il mirino sullo schermo per interagire con gli shader sensibili al mouse.
    - **GLSL Shader Code**: Incolla qui qualsiasi codice proveniente da Shadertoy!
+   - **Compiler Status**: Console interattiva in tempo reale direttamente sotto il codice che riporta lo stato del compilatore GPU Metal o l'errore di sintassi con numero di riga esatto.
 6. Premi la barra spaziatrice per avviare la riproduzione in tempo reale.
 
 ---
 
-### Metodo 2: Direttamente nella Timeline della Pagina Edit (Drag & Drop)
+### Metodo 2: Come Generatore nella Timeline della Pagina Edit (Drag & Drop)
 
 1. Apri la pagina **Edit** di DaVinci Resolve.
 2. Apri il pannello **Effetti** in alto a sinistra.
 3. Nel menu laterale, seleziona **Generators** (Generatori).
 4. Individua il generatore denominato **`Shadertoy`**.
 5. Trascinalo direttamente su una traccia video della tua Timeline come fosse una clip standard.
-6. Seleziona la clip sulla timeline e apri l'**Inspector** in alto a destra:
-   - Troverai tutti i controlli (Preset, Editor di codice, Controlli temporali e Mouse).
-   - Ogni modifica viene renderizzata istantaneamente sulla traccia video!
+6. Seleziona la clip sulla timeline e apri l'**Inspector** in alto a destra per modificare parametri e codice.
+
+---
+
+### Metodo 3: Come Effetto su Clip Video nella Pagina Edit
+
+1. Apri la pagina **Edit** di DaVinci Resolve.
+2. Apri il pannello **Effetti -> Effetti** (Fusion Effects).
+3. Individua l'effetto **`Shadertoy`**.
+4. Trascinalo **direttamente sopra una clip video esistente** sulla timeline: la clip video originale verrà automaticamente instradata su `iChannel0`!
+5. Perfetto per applicare distorsioni, monitor CRT, glitch analogici VHS, raymarching o grading procedurale alle tue riprese.
 
 ---
 
@@ -148,6 +157,10 @@ All'interno della cartella `examples/` (e selezionabili dal menu Preset dell'Ins
 ### 6. `examples/06_crt_scanlines_glitch.glsl` (Monitor CRT Vintage & Aberrazione Cromatica)
 - Trasforma il segnale video in ingresso su `iChannel0` in un display arcade vintage anni '80: curvatura dello schermo a barilotto, aberrazione cromatica sui bordi (separazione RGB), scanline orizzontali, vignettatura e flicker analogico.
 - Include generatore di barre colore SMPTE di fallback se l'ingresso è vuoto.
+
+### 7. `examples/07_vhs_tracking_glitch.glsl` (Distorsione Nastro VHS & Onde di Rumore Simplex)
+- Simulazione autentica di nastro magnetico VHS logorato: onde d'interferenza con Simplex Noise 2D (Ashima Arts), dislocamento orizzontale delle linee di scansione (tracking error), aberrazione cromatica sui canali verde/blu e rumore statico procedurale.
+- Si applica sia come generatore autonomo che come effetto su clip video tramite `iChannel0`.
 
 ---
 
@@ -212,10 +225,9 @@ Il Fuse incapsula automaticamente il codice utente all'interno di `struct Shader
 Se la schermata visualizza un colore magenta uniforme:
 - Indica che il codice incollato contiene un **errore di sintassi** (ad esempio una parentesi mancante, una variabile non dichiarata o una funzione non supportata).
 - **Come visualizzare l'errore esatto:**
-  1. Nella barra dei menu superiore di DaVinci Resolve, vai su **Workspace -> Console** (oppure **Finestra -> Console**).
-  2. Seleziona il tab **Fusion**.
-  3. Troverai stampato il messaggio dettagliato del compilatore Metal di DaVinci Resolve con il numero di riga e la causa dell'errore.
-  4. Correggi la riga nell'Inspector di `Shadertoy` e la visualizzazione si aggiornerà istantaneamente!
+  1. Controlla direttamente la casella **Compiler Status** nell'Inspector, sotto il codice GLSL: mostra la riga esatta dell'errore (es. `Line 37:24: error: ...`) e il cursore grafico `^` che punta al punto esatto del problema.
+  2. In alternativa, puoi aprire la console dettagliata da **Workspace -> Console** (o **Finestra -> Console**), tab **Fusion**.
+  3. Correggi la riga nell'Inspector di `Shadertoy` e la visualizzazione si aggiornerà istantaneamente!
 
 ### Il plugin non compare nell'elenco di Fusion
 - Verifica che `Shadertoy.fuse` si trovi esattamente in:
